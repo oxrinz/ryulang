@@ -84,6 +84,7 @@ pub fn prettyPrintExpression(allocator: Allocator, writer: anytype, expression: 
                 .Integer => |i| try writer.print("Integer({})\n", .{i}),
                 .Float => |f| try writer.print("Float({})\n", .{f}),
                 .String => |s| try writer.print("String(\"{s}\")\n", .{s}),
+                .Array => |a| try writer.print("Array(\"{any}\")\n", .{a}),
             }
         },
         .binary => |binary| {

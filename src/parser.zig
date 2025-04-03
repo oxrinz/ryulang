@@ -168,8 +168,25 @@ pub const Parser = struct {
                     self.cursor += 1;
                 }
             },
+            .LEFT_BRACKET => {
+                var value_array = std.ArrayList(ast.Value).init(self.allocator);
+                self.cursor += 1;
+                var result = try self.parseFactor();
+                try value_array.append(result.*.constant);
+                while (self.curr().type != .RIGHT_BRACKET) {
+                    try self.expect(.COMMA);
+                    self.cursor += 1;
+                    result = try self.parseFactor();
+                    try value_array.append(result.*.constant);
+                }
+                self.cursor += 1;
+
+                expr.* = ast.Expression{ .constant = .{ .Array = try value_array.toOwnedSlice() } };
+
+                return expr;
+            },
             else => {
-                const msg = try std.fmt.allocPrint(diagnostics.arena.allocator(), "Syntax error at line {}. Expected one of the following: NUMBER, LEFT_PAREN, IDENTIFIER. Got token type {}", .{
+                const msg = try std.fmt.allocPrint(diagnostics.arena.allocator(), "Syntax error at line {}. Expected one of the following: NUMBER, LEFT_PAREN, IDENTIFIER, LEFT_BRACKET. Got token type {}", .{
                     self.curr().line,
                     self.curr().type,
                 });

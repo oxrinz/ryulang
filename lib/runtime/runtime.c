@@ -49,6 +49,7 @@ void print_results(void *result, int n)
 // ^ same with block dims
 int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
 {
+    print("fucki");
     CUresult err;
     CUdevice device;
     CUcontext context;

@@ -161,26 +161,31 @@ pub const Generator = struct {
                 return try self.generateBinary(binary);
             },
             .constant => |constant| {
-                switch (constant) {
-                    .Integer => {
-                        const i32Type = core.LLVMInt32Type();
-                        return core.LLVMConstInt(i32Type, @intCast(constant.Integer), 0);
-                    },
-                    .Float => {
-                        const f32Type = core.LLVMFloatType();
-                        return core.LLVMConstReal(f32Type, constant.Float);
-                    },
-                    .String => {
-                        const string_val = constant.String;
-                        const null_terminated = try std.fmt.allocPrint(self.allocator, "{s}\x00", .{string_val});
-                        defer self.allocator.free(null_terminated);
-                        return core.LLVMBuildGlobalStringPtr(self.builder, @ptrCast(null_terminated), "str_const");
-                    },
-                }
+                return try self.generateConstant(constant);
             },
             .call => |call| {
                 if (call.type == .Device) {
-                    return try self.ptx_backend.launchKernel("simple_add");
+                    const array = try self.generateExpression(call.args[0].*);
+
+                    const array_type = core.LLVMTypeOf(array);
+                    const array_element_count = core.LLVMGetArrayLength(array_type);
+
+                    const input_length = call.args.len;
+                    const float_type = core.LLVMFloatType();
+                    const float_array_type = core.LLVMArrayType(float_type, array_element_count);
+                    const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+                    const void_ptr_ptr_type = core.LLVMPointerType(void_ptr_type, 0);
+                    const ptr_array_type = core.LLVMArrayType(void_ptr_type, @intCast(input_length));
+                    const a_array_ptr = core.LLVMBuildAlloca(self.builder, float_array_type, "a_data_local".ptr);
+                    _ = core.LLVMBuildStore(self.builder, array, a_array_ptr);
+                    const input_ptrs_array_ptr = core.LLVMBuildAlloca(self.builder, ptr_array_type, "input_ptrs_local".ptr);
+                    const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
+                    var indices = [_]types.LLVMValueRef{ zero, zero };
+                    const ptr0 = core.LLVMBuildGEP2(self.builder, ptr_array_type, input_ptrs_array_ptr, &indices, 2, "ptr0".ptr);
+                    const a_ptr = core.LLVMBuildBitCast(self.builder, a_array_ptr, void_ptr_type, "a_ptr".ptr);
+                    _ = core.LLVMBuildStore(self.builder, a_ptr, ptr0);
+                    const inputs_ptr = core.LLVMBuildBitCast(self.builder, input_ptrs_array_ptr, void_ptr_ptr_type, "inputs_ptr".ptr);
+                    return try self.ptx_backend.launchKernel("simple_add", inputs_ptr);
                 } else {
                     if (call.builtin == true) {
                         return try self.generateBuiltInFunction(call);
@@ -218,6 +223,48 @@ pub const Generator = struct {
                     @panic("Use of undefined variable");
                 };
                 return value;
+            },
+        }
+    }
+
+    fn generateConstant(self: *Generator, constant: ast.Value) !types.LLVMValueRef {
+        switch (constant) {
+            .Integer => {
+                const i32Type = core.LLVMInt32Type();
+                return core.LLVMConstInt(i32Type, @intCast(constant.Integer), 0);
+            },
+            .Float => {
+                const f32Type = core.LLVMFloatType();
+                return core.LLVMConstReal(f32Type, constant.Float);
+            },
+            .String => {
+                const string_val = constant.String;
+                const null_terminated = try std.fmt.allocPrint(self.allocator, "{s}\x00", .{string_val});
+                defer self.allocator.free(null_terminated);
+                return core.LLVMBuildGlobalStringPtr(self.builder, @ptrCast(null_terminated), "str_const");
+            },
+            .Array => {
+                if (constant.Array.len == 0) {
+                    const default_type = core.LLVMInt32Type();
+                    return core.LLVMConstArray(default_type, null, 0);
+                }
+
+                const first_elem = constant.Array[0];
+                const element_type = switch (first_elem) {
+                    .Integer => core.LLVMInt32Type(),
+                    .Float => core.LLVMFloatType(),
+                    .String => core.LLVMPointerType(core.LLVMInt8Type(), 0),
+                    else => unreachable,
+                };
+
+                var element_values = try self.allocator.alloc(types.LLVMValueRef, constant.Array.len);
+                defer self.allocator.free(element_values);
+
+                for (constant.Array, 0..) |elem, i| {
+                    element_values[i] = try self.generateConstant(elem);
+                }
+
+                return core.LLVMConstArray(element_type, @ptrCast(element_values), @intCast(constant.Array.len));
             },
         }
     }

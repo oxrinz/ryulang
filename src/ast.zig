@@ -36,12 +36,14 @@ pub const ValueType = enum {
     Integer,
     Float,
     String,
+    Array,
 };
 
 pub const Value = union(ValueType) {
     Integer: i32,
     Float: f32,
     String: []const u8,
+    Array: []Value,
 };
 
 pub const Binary = struct {
