@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "system_error": "cpp",
+        "string.h": "c",
+        "cstdlib": "c",
+        "initializer_list": "c",
+        "stdlib.h": "c",
+        "stdio.h": "c",
+        "cuda.h": "c"
+    }
+}
