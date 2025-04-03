@@ -101,6 +101,7 @@ pub const PTXBackend = struct {
         const char_type = core.LLVMInt8Type();
         const char_ptr_type = core.LLVMPointerType(char_type, 0);
         const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+        const void_ptr_ptr_type = core.LLVMPointerType(void_ptr_type, 0);
 
         const return_type = core.LLVMInt32Type();
         var param_types = [_]types.LLVMTypeRef{
@@ -121,51 +122,46 @@ pub const PTXBackend = struct {
 
         const int_type = core.LLVMInt32Type();
         const float_type = core.LLVMFloatType();
-        const float_array_type = core.LLVMArrayType(float_type, 100);
+        const float_array_type = core.LLVMArrayType(float_type, 4);
 
-        const a_array = core.LLVMAddGlobal(self.llvm_module, float_array_type, "a_data".ptr);
-        const b_array = core.LLVMAddGlobal(self.llvm_module, float_array_type, "b_data".ptr);
         const result_array = core.LLVMAddGlobal(self.llvm_module, float_array_type, "result_data".ptr);
+        var result_values: [4]types.LLVMValueRef = undefined;
 
-        // Alternative approach without using std.rand
-        // Create array of pseudo-random float values using a simple approach
-        var a_values: [100]types.LLVMValueRef = undefined;
-        var b_values: [100]types.LLVMValueRef = undefined;
-        var result_values: [100]types.LLVMValueRef = undefined;
+        const n_val = core.LLVMConstInt(int_type, 4, 0);
 
-        // Fill arrays with pseudo-random values
-        for (0..100) |i| {
-            // Very simple LCG random number generator
-            const a_random = 3;
+        // init input array
+        var a_values: [4]types.LLVMValueRef = undefined;
 
-            const b_random = 3;
+        for (0..4) |i| {
+            const a_random: f64 = @floatFromInt(i);
 
             a_values[i] = core.LLVMConstReal(float_type, a_random);
-            b_values[i] = core.LLVMConstReal(float_type, b_random);
-            // Initialize result array with zeros
             result_values[i] = core.LLVMConstReal(float_type, 0.0);
         }
 
-        // Create constant arrays from the value arrays
-        const a_constant_array = core.LLVMConstArray(float_type, &a_values, 100);
-        const b_constant_array = core.LLVMConstArray(float_type, &b_values, 100);
-        const result_constant_array = core.LLVMConstArray(float_type, &result_values, 100);
+        const a_constant_array = core.LLVMConstArray(float_type, &a_values, 4);
 
-        // Set the initializers for the global arrays
+        const ptr_array_type = core.LLVMArrayType(void_ptr_type, 1);
+        const input_ptrs_array = core.LLVMAddGlobal(self.llvm_module, ptr_array_type, "input_ptrs".ptr);
+
+        const a_array = core.LLVMAddGlobal(self.llvm_module, float_array_type, "a_data".ptr);
         core.LLVMSetInitializer(a_array, a_constant_array);
-        core.LLVMSetInitializer(b_array, b_constant_array);
+
+        var ptr_values: [1]types.LLVMValueRef = undefined;
+        ptr_values[0] = core.LLVMBuildBitCast(self.builder, a_array, void_ptr_type, "a_ptr".ptr);
+
+        const ptr_constant_array = core.LLVMConstArray(void_ptr_type, &ptr_values, 1);
+        core.LLVMSetInitializer(input_ptrs_array, ptr_constant_array);
+
+        const result_constant_array = core.LLVMConstArray(float_type, &result_values, 4);
         core.LLVMSetInitializer(result_array, result_constant_array);
 
-        const a_ptr = core.LLVMBuildBitCast(self.builder, a_array, void_ptr_type, "a_ptr".ptr);
-        const b_ptr = core.LLVMBuildBitCast(self.builder, b_array, void_ptr_type, "b_ptr".ptr);
         const result_ptr = core.LLVMBuildBitCast(self.builder, result_array, void_ptr_type, "result_ptr".ptr);
-
-        const n_val = core.LLVMConstInt(int_type, 100, 0);
+        const inputs_ptr = core.LLVMBuildBitCast(self.builder, input_ptrs_array, void_ptr_ptr_type, "inputs_ptr".ptr);
 
         var args = [_]types.LLVMValueRef{
             core.LLVMBuildBitCast(self.builder, global_ptx_str, char_ptr_type, "ptx_code_ptr".ptr),
-            a_ptr,
-            b_ptr,
+            inputs_ptr,
             result_ptr,
             n_val,
         };

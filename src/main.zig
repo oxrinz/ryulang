@@ -132,11 +132,11 @@ fn emit(module: *llvm.types.LLVMOpaqueModule) !void {
         try file.writeAll(obj_data[0..obj_size]);
     }
 
-    // defer {
-    //     std.fs.cwd().deleteFile(tmp_file) catch |err| {
-    //         std.debug.print("Failed to delete temporary file: {}\n", .{err});
-    //     };
-    // }
+    defer {
+        std.fs.cwd().deleteFile(tmp_file) catch |err| {
+            std.debug.print("Failed to delete temporary file: {}\n", .{err});
+        };
+    }
     defer {
         std.fs.cwd().deleteFile("program") catch |err| {
             std.debug.print("Failed to delete executable: {}\n", .{err});

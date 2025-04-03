@@ -116,7 +116,7 @@ pub const Generator = struct {
                         \\    ld.global.f32   f1, [rd1];
                         \\    
                         \\    // Add constant 2.0 to the value
-                        \\    mov.f32         f2, 0f80000000;  // 2.0 in hex floating point
+                        \\    mov.f32         f2, 0f40000000;  // 2.0 in hex floating point
                         \\    add.f32         f1, f1, f2;
                         \\    
                         \\    // Store result to output

@@ -47,7 +47,7 @@ void print_results(void *result, int n)
 // take result pointer, also as device pointer
 // grid dimensions as raw values, 3 int array
 // ^ same with block dims
-int run_cuda_kernel(const char *ptx_code, void *a, void *b, void *result, int n)
+int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
 {
     CUresult err;
     CUdevice device;
@@ -55,7 +55,7 @@ int run_cuda_kernel(const char *ptx_code, void *a, void *b, void *result, int n)
     CUmodule module;
     CUfunction kernel;
     CUdeviceptr d_input, d_output;
-    float host_input[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    void *input1 = inputs[0];
     float host_output[4];
     uint32_t param_n = 4;
     size_t data_size = 4 * sizeof(float);
@@ -101,7 +101,7 @@ int run_cuda_kernel(const char *ptx_code, void *a, void *b, void *result, int n)
         exit(1);
     }
 
-    err = cuMemcpyHtoD(d_input, host_input, data_size);
+    err = cuMemcpyHtoD(d_input, input1, data_size);
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuMemcpyHtoD for d_input failed: %d\n", err);
         exit(1);

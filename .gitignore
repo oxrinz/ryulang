@@ -9,3 +9,6 @@ zig-out/
 zig-cache/
 
 .ryuthon-cache/
+
+main.ryu
+gpu.ryu
