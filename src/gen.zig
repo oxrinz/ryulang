@@ -11,21 +11,27 @@ const core = llvm.core;
 const process = std.process;
 const execution = llvm.engine;
 
-const GenArrayType = struct {
-    type: *GenType,
-    length: usize,
-};
-
-const GenType = union(ast.ValueType) {
+const GenType = union(enum) {
     Integer,
     Float,
     String,
-    Array: GenArrayType,
+    Array,
+    Pointer: *GenType,
 };
 
 const TypedValueRef = struct {
     value_ref: types.LLVMValueRef,
     type: GenType,
+};
+
+const RuntimeFunction = enum {
+    print,
+    int_to_string,
+    float_to_string,
+    bool_to_string,
+    array_to_string,
+    print_results,
+    string_length,
 };
 
 pub const Generator = struct {
@@ -36,6 +42,7 @@ pub const Generator = struct {
     builder: types.LLVMBuilderRef,
     named_values: std.StringHashMap(TypedValueRef),
     ptx_backend: PTXBackend,
+    kernels: std.StringHashMap(types.LLVMValueRef),
 
     pub fn init(module: ast.Module, allocator: std.mem.Allocator) Generator {
         _ = target.LLVMInitializeNativeTarget();
@@ -59,6 +66,7 @@ pub const Generator = struct {
             .ptx_backend = undefined,
             .llvm_module = llvm_module,
             .llvm_context = core.LLVMContextCreate(),
+            .kernels = std.StringHashMap(types.LLVMValueRef).init(allocator),
         };
 
         gen.ptx_backend = PTXBackend.init(allocator, &gen);
@@ -66,7 +74,7 @@ pub const Generator = struct {
         return gen;
     }
 
-    pub fn generate(self: *Generator) anyerror!types.LLVMModuleRef {
+    pub fn generate(self: *Generator) anyerror!struct { llvm_module: types.LLVMModuleRef, ptx: []const u8 } {
         for (self.module.block.items) |stmt| {
             try self.generateStatement(stmt);
         }
@@ -76,7 +84,7 @@ pub const Generator = struct {
 
         core.LLVMDisposeBuilder(self.builder);
 
-        return self.llvm_module;
+        return .{ .llvm_module = self.llvm_module, .ptx = "" };
     }
 
     fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!void {
@@ -91,60 +99,8 @@ pub const Generator = struct {
             },
             .function_definition => |function_definition| {
                 if (function_definition.type == .Device) {
-                    const sample_ptx =
-                        \\//
-                        \\.version 7.5
-                        \\.target sm_75
-                        \\.address_size 64
-                        \\
-                        \\.visible .entry main(
-                        \\    .param .u64 input_ptr,
-                        \\    .param .u64 output_ptr,
-                        \\    .param .u32 n
-                        \\)
-                        \\{
-                        \\    .reg .b32       r<5>;
-                        \\    .reg .b64       rd<5>;
-                        \\    .reg .f32       f<3>;
-                        \\    .reg .pred      p<2>;
-                        \\
-                        \\    // Get the thread ID
-                        \\    ld.param.u64    rd1, [input_ptr];
-                        \\    ld.param.u64    rd2, [output_ptr];
-                        \\    ld.param.u32    r1, [n];
-                        \\    
-                        \\    // Calculate thread ID
-                        \\    mov.u32         r2, %tid.x;
-                        \\    mov.u32         r3, %ntid.x;
-                        \\    mov.u32         r4, %ctaid.x;
-                        \\    mad.lo.u32      r2, r4, r3, r2;
-                        \\    
-                        \\    // Check if thread ID is within bounds
-                        \\    setp.ge.u32     p1, r2, r1;
-                        \\    @p1 bra         EXIT;
-                        \\    
-                        \\    // Calculate input and output addresses
-                        \\    cvt.u64.u32     rd3, r2;
-                        \\    mul.wide.u32    rd3, r2, 4;      // 4 bytes per float
-                        \\    add.u64         rd1, rd1, rd3;   // input_ptr + offset
-                        \\    add.u64         rd2, rd2, rd3;   // output_ptr + offset
-                        \\    
-                        \\    // Load input value
-                        \\    ld.global.f32   f1, [rd1];
-                        \\    
-                        \\    // Add constant 2.0 to the value
-                        \\    mov.f32         f2, 0f40000000;  // 2.0 in hex floating point
-                        \\    add.f32         f1, f1, f2;
-                        \\    
-                        \\    // Store result to output
-                        \\    st.global.f32   [rd2], f1;
-                        \\    
-                        \\EXIT:
-                        \\    ret;
-                        \\}
-                    ;
-
-                    try self.ptx_backend.addKernel("simple_add", sample_ptx);
+                    const ptx = try self.ptx_backend.generateKernel(function_definition);
+                    try self.addKernel(function_definition.identifier, ptx);
                 } else {
                     const func_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), null, 0, 0);
                     const c_name = try self.allocator.dupeZ(u8, function_definition.identifier);
@@ -183,56 +139,35 @@ pub const Generator = struct {
             .call => |call| {
                 if (call.type == .Device) {
                     const array = try self.generateExpression(call.args[0].*);
-
-                    const array_element_count = array.type.Array.length;
-
-                    const input_length = call.args.len;
-
+                    const array_metadata = self.getArrayMetadata(array);
+                    const array_element_count = array_metadata.length.value_ref;
                     const float_type = core.LLVMFloatType();
-                    const float_array_type = core.LLVMArrayType(float_type, @intCast(array_element_count));
-                    const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
-                    const void_ptr_ptr_type = core.LLVMPointerType(void_ptr_type, 0);
-                    const ptr_array_type = core.LLVMArrayType(void_ptr_type, @intCast(input_length));
+                    const result_ptr = core.LLVMBuildArrayMalloc(self.builder, float_type, array_element_count, "result_ptr");
 
-                    const a_array_ptr = core.LLVMBuildAlloca(self.builder, float_array_type, "a_data_local".ptr);
-                    _ = core.LLVMBuildStore(self.builder, array.value_ref, a_array_ptr);
-                    const input_ptrs_array_ptr = core.LLVMBuildAlloca(self.builder, ptr_array_type, "input_ptrs_local".ptr);
-                    const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
-                    var indices = [_]types.LLVMValueRef{ zero, zero };
-                    const ptr0 = core.LLVMBuildGEP2(self.builder, ptr_array_type, input_ptrs_array_ptr, &indices, 2, "ptr0".ptr);
-                    const a_ptr = core.LLVMBuildBitCast(self.builder, a_array_ptr, void_ptr_type, "a_ptr".ptr);
-                    _ = core.LLVMBuildStore(self.builder, a_ptr, ptr0);
-                    const inputs_ptr = core.LLVMBuildBitCast(self.builder, input_ptrs_array_ptr, void_ptr_ptr_type, "inputs_ptr".ptr);
+                    const input_ptr = array_metadata.data_ptr.value_ref;
+                    const input_ptrs_ptr = core.LLVMBuildAlloca(self.builder, core.LLVMPointerType(float_type, 0), "input_ptrs_ptr");
+                    _ = core.LLVMBuildStore(self.builder, input_ptr, input_ptrs_ptr);
 
-                    const result_array = core.LLVMBuildAlloca(self.builder, float_array_type, "result_data".ptr);
-                    const zero_initializer = core.LLVMConstNull(float_array_type);
-                    core.LLVMSetInitializer(result_array, zero_initializer);
-                    const result_ptr = core.LLVMBuildBitCast(self.builder, result_array, void_ptr_type, "result_ptr".ptr);
-
-                    _ = try self.ptx_backend.launchKernel("simple_add", inputs_ptr, result_ptr);
+                    _ = try self.launchKernel(call.identifier, input_ptrs_ptr, result_ptr);
 
                     var gen_type: GenType = .Float;
-
-                    const gen_array_type = GenArrayType{
-                        .type = &gen_type,
-                        .length = array_element_count,
-                    };
-
-                    return TypedValueRef{
-                        .type = .{ .Array = gen_array_type },
-                        .value_ref = result_array,
-                    };
+                    return self.createArrayStruct(array_metadata.length, .{
+                        .type = .{ .Pointer = &gen_type },
+                        .value_ref = result_ptr,
+                    });
                 } else {
                     if (call.builtin == true) {
-                        return try self.generateBuiltInFunction(call);
+                        _ = try self.generateBuiltInFunction(call);
+                        const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
+                        return TypedValueRef{
+                            .value_ref = zero,
+                            .type = .Integer,
+                        };
                     } else {
                         const c_name = try self.allocator.dupeZ(u8, call.identifier);
                         defer self.allocator.free(c_name);
 
                         const func = core.LLVMGetNamedFunction(self.llvm_module, c_name);
-                        if (func == null) {
-                            @panic("Undefined function");
-                        }
 
                         if (call.args.len == 0) {
                             const return_type = core.LLVMInt32Type();
@@ -291,16 +226,21 @@ pub const Generator = struct {
                 const string_val = constant.String;
                 const null_terminated = try std.fmt.allocPrint(self.allocator, "{s}\x00", .{string_val});
                 defer self.allocator.free(null_terminated);
+
+                const str_type = core.LLVMArrayType(core.LLVMInt8Type(), @intCast(null_terminated.len));
+                const str_name = "string";
+                const str_global = core.LLVMAddGlobal(self.llvm_module, str_type, str_name.ptr);
+                core.LLVMSetGlobalConstant(str_global, 1);
+                core.LLVMSetLinkage(str_global, .LLVMInternalLinkage);
+                core.LLVMSetInitializer(str_global, core.LLVMConstStringInContext(self.llvm_context, @ptrCast(null_terminated), @intCast(null_terminated.len), 0 // Don't null-terminate again; already done
+                ));
+
                 return TypedValueRef{
                     .type = .String,
-                    .value_ref = core.LLVMConstString(@ptrCast(null_terminated), @intCast(null_terminated.len), 1),
+                    .value_ref = str_global,
                 };
             },
             .Array => {
-                if (constant.Array.len == 0) {
-                    @panic("empty array");
-                }
-
                 const first_elem = constant.Array[0];
                 const element_type = switch (first_elem) {
                     .Integer => core.LLVMInt32Type(),
@@ -311,34 +251,36 @@ pub const Generator = struct {
 
                 var element_values = try self.allocator.alloc(types.LLVMValueRef, constant.Array.len);
                 defer self.allocator.free(element_values);
-
                 for (constant.Array, 0..) |elem, i| {
                     const res = try self.generateConstant(elem);
                     element_values[i] = res.value_ref;
                 }
 
-                var gen_type: GenType = switch (first_elem) {
-                    .Float => .Float,
-                    .Integer => .Integer,
-                    .String => .String,
-                    else => unreachable,
-                };
-                const array_type = GenArrayType{
-                    .type = &gen_type,
-                    .length = constant.Array.len,
-                };
+                const array_data = core.LLVMConstArray(element_type, @ptrCast(element_values), @intCast(constant.Array.len));
 
-                return TypedValueRef{
-                    .type = .{
-                        .Array = array_type,
-                    },
-                    .value_ref = core.LLVMConstArray(element_type, @ptrCast(element_values), @intCast(constant.Array.len)),
-                };
+                const array_data_global = core.LLVMAddGlobal(self.llvm_module, core.LLVMTypeOf(array_data), "array_data");
+                core.LLVMSetInitializer(array_data_global, array_data);
+                core.LLVMSetGlobalConstant(array_data_global, 1);
+
+                const i32_type = core.LLVMInt32Type();
+                const data_ptr_type = core.LLVMPointerType(element_type, 0);
+
+                var field_types = try self.allocator.alloc(types.LLVMTypeRef, 3);
+                defer self.allocator.free(field_types);
+                field_types[0] = i32_type; // length
+                field_types[1] = i32_type; // capacity
+                field_types[2] = data_ptr_type; // pointer to data
+
+                var pointer_type: GenType = .Float;
+                return self.createArrayStruct(
+                    .{ .type = .Integer, .value_ref = core.LLVMConstInt(i32_type, constant.Array.len, 0) },
+                    .{ .type = .{ .Pointer = &pointer_type }, .value_ref = array_data_global },
+                );
             },
         }
     }
 
-    fn getOrCreateExternalFunction(self: *Generator, name: []const u8, fn_type: types.LLVMTypeRef) types.LLVMValueRef {
+    fn getExternalFunction(self: *Generator, name: []const u8, fn_type: types.LLVMTypeRef) types.LLVMValueRef {
         var fn_val = core.LLVMGetNamedFunction(self.llvm_module, @ptrCast(name));
         if (fn_val == null) {
             fn_val = core.LLVMAddFunction(self.llvm_module, @ptrCast(name), fn_type);
@@ -347,110 +289,98 @@ pub const Generator = struct {
         return fn_val;
     }
 
-    fn getLLVMTypeForGenType(self: *Generator, gen_type: GenType) types.LLVMTypeRef {
-        return switch (gen_type) {
-            .Integer => core.LLVMInt32Type(),
-            .Float => core.LLVMFloatType(),
-            .String => core.LLVMPointerType(core.LLVMInt8Type(), 0),
-            .Array => |array_type| {
-                const elem_type = self.getLLVMTypeForGenType(array_type.type.*);
-                return core.LLVMArrayType(elem_type, @intCast(array_type.length));
-            },
-        };
-    }
-
-    fn generateBuiltInFunction(self: *Generator, call: ast.Call) anyerror!TypedValueRef {
-        var char_ptr_type = core.LLVMPointerType(core.LLVMInt8Type(), 0);
-
-        var print_param_types = [_]types.LLVMTypeRef{char_ptr_type};
-        const print_fn_type = core.LLVMFunctionType(core.LLVMVoidType(), @ptrCast(&print_param_types[0]), print_param_types.len, 0);
-        const print_fn = self.getOrCreateExternalFunction("print", print_fn_type);
-
-        var int_to_string_fn = core.LLVMGetNamedFunction(self.llvm_module, "int_to_string");
-        if (int_to_string_fn == null) {
-            var param_types = [_]types.LLVMTypeRef{core.LLVMInt32Type()};
-            const fn_type = core.LLVMFunctionType(char_ptr_type, if (param_types.len == 0) null else @ptrCast(&param_types[0]), param_types.len, 0);
-            int_to_string_fn = core.LLVMAddFunction(self.llvm_module, "int_to_string", fn_type);
-            core.LLVMSetLinkage(int_to_string_fn, .LLVMExternalLinkage);
-        }
-
-        var float_to_string_fn = core.LLVMGetNamedFunction(self.llvm_module, "float_to_string");
-        if (float_to_string_fn == null) {
-            var param_types = [_]types.LLVMTypeRef{core.LLVMFloatType()};
-            const fn_type = core.LLVMFunctionType(char_ptr_type, if (param_types.len == 0) null else @ptrCast(&param_types[0]), param_types.len, 0);
-            float_to_string_fn = core.LLVMAddFunction(self.llvm_module, "float_to_string", fn_type);
-            core.LLVMSetLinkage(float_to_string_fn, .LLVMExternalLinkage);
-        }
-
-        var bool_to_string_fn = core.LLVMGetNamedFunction(self.llvm_module, "bool_to_string");
-        if (bool_to_string_fn == null) {
-            var param_types = [_]types.LLVMTypeRef{core.LLVMInt1Type()};
-            const fn_type = core.LLVMFunctionType(char_ptr_type, if (param_types.len == 0) null else @ptrCast(&param_types[0]), param_types.len, 0);
-            bool_to_string_fn = core.LLVMAddFunction(self.llvm_module, "bool_to_string", fn_type);
-            core.LLVMSetLinkage(bool_to_string_fn, .LLVMExternalLinkage);
-        }
-
-        var arr_to_string_param_types = [_]types.LLVMTypeRef{
-            core.LLVMPointerType(core.LLVMVoidType(), 0),
-            core.LLVMInt32Type(),
-            core.LLVMInt32Type(),
-        };
-        const arr_to_string_fn_type = core.LLVMFunctionType(char_ptr_type, @ptrCast(&arr_to_string_param_types[0]), arr_to_string_param_types.len, 0);
-        const arr_to_string_fn = self.getOrCreateExternalFunction("array_to_string", arr_to_string_fn_type);
-
+    fn generateBuiltInFunction(self: *Generator, call: ast.Call) anyerror!?TypedValueRef {
         const arg_value = try self.generateExpression(call.args[0].*);
 
-        var str_value: types.LLVMValueRef = undefined;
+        var print_args = std.ArrayList(TypedValueRef).init(self.allocator);
 
         switch (arg_value.type) {
             .Integer => {
                 const int_value = arg_value.value_ref;
 
-                var args = [_]types.LLVMValueRef{int_value};
-                var param_type = core.LLVMInt1Type();
-                const fn_type = core.LLVMFunctionType(char_ptr_type, &param_type, 1, 0);
-                str_value = core.LLVMBuildCall2(self.builder, fn_type, int_to_string_fn, &args[0], 1, "int_str");
+                var args = [_]TypedValueRef{.{
+                    .type = .Integer,
+                    .value_ref = int_value,
+                }};
+
+                const res = try self.callRuntimeFunction(.int_to_string, &args);
+
+                try print_args.append(TypedValueRef{
+                    .type = .Integer,
+                    .value_ref = res.?.value_ref,
+                });
             },
             .Float => {
                 const float_value = arg_value.value_ref;
 
-                var args = [_]types.LLVMValueRef{float_value};
-                var param_type = core.LLVMInt1Type();
-                const fn_type = core.LLVMFunctionType(char_ptr_type, &param_type, 1, 0);
-                str_value = core.LLVMBuildCall2(self.builder, fn_type, float_to_string_fn, &args[0], 1, "float_str");
+                var args = [_]TypedValueRef{.{
+                    .type = .Float,
+                    .value_ref = float_value,
+                }};
+
+                const res = try self.callRuntimeFunction(.float_to_string, &args);
+
+                try print_args.append(TypedValueRef{
+                    .type = .Float,
+                    .value_ref = res.?.value_ref,
+                });
+            },
+            .String => {
+                const str_global = arg_value.value_ref;
+
+                try print_args.append(TypedValueRef{
+                    .type = .String,
+                    .value_ref = str_global,
+                });
             },
             .Array => {
-                const length_val = core.LLVMConstInt(core.LLVMInt32Type(), arg_value.type.Array.length, 0);
-                const type_val = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0); // 1 represents Float type
+                const array_metadata = self.getArrayMetadata(arg_value);
 
-                var args = [_]types.LLVMValueRef{ arg_value.value_ref, length_val, type_val };
-                str_value = core.LLVMBuildCall2(self.builder, arr_to_string_fn_type, arr_to_string_fn, &args, 3, "float_str");
+                const length_val = array_metadata.length.value_ref;
+                const type_val = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0);
+
+                var args = [_]TypedValueRef{
+                    array_metadata.data_ptr,
+                    .{
+                        .type = .Float,
+                        .value_ref = length_val,
+                    },
+                    .{
+                        .type = .Float,
+                        .value_ref = type_val,
+                    },
+                };
+
+                const res = try self.callRuntimeFunction(.array_to_string, &args);
+
+                try print_args.append(TypedValueRef{
+                    .type = .String,
+                    .value_ref = res.?.value_ref,
+                });
             },
             else => unreachable,
         }
 
-        var args = [_]types.LLVMValueRef{str_value};
-        const fn_type = core.LLVMFunctionType(core.LLVMVoidType(), &char_ptr_type, 1, 0);
-        return TypedValueRef{
-            .type = .Float,
-            .value_ref = core.LLVMBuildCall2(self.builder, fn_type, print_fn, &args[0], 1, ""),
-        };
+        return try self.callRuntimeFunction(.print, try print_args.toOwnedSlice());
     }
 
     const BuildFn = fn (types.LLVMBuilderRef, types.LLVMValueRef, types.LLVMValueRef, [*:0]const u8) callconv(.C) types.LLVMValueRef;
     fn dispatchOp(self: *Generator, left: TypedValueRef, right: TypedValueRef, float_fn: BuildFn, int_fn: BuildFn) TypedValueRef {
         if (@intFromEnum(left.type) != @intFromEnum(right.type)) @panic("both operands must be same type");
-        const is_float = left.type == .Float;
-        if (is_float) {
-            return TypedValueRef{
-                .type = .Float,
-                .value_ref = float_fn(self.builder, left.value_ref, right.value_ref, ""),
-            };
-        } else {
-            return TypedValueRef{
-                .type = .Integer,
-                .value_ref = int_fn(self.builder, left.value_ref, right.value_ref, ""),
-            };
+        switch (left.type) {
+            .Float => {
+                return TypedValueRef{
+                    .type = .Float,
+                    .value_ref = float_fn(self.builder, left.value_ref, right.value_ref, ""),
+                };
+            },
+            .Integer => {
+                return TypedValueRef{
+                    .type = .Integer,
+                    .value_ref = int_fn(self.builder, left.value_ref, right.value_ref, ""),
+                };
+            },
+            else => @panic("unsupported binary operation"),
         }
     }
 
@@ -465,5 +395,175 @@ pub const Generator = struct {
             .Divide => dispatchOp(self, left, right, core.LLVMBuildFDiv, core.LLVMBuildSDiv),
             else => @panic("Operator not implemented yet"),
         };
+    }
+
+    fn callRuntimeFunction(self: *Generator, function: RuntimeFunction, args: []TypedValueRef) anyerror!?TypedValueRef {
+        const char_ptr_type = core.LLVMPointerType(core.LLVMInt8Type(), 0);
+
+        switch (function) {
+            .print => {
+                const name = "print";
+
+                var param_types = [_]types.LLVMTypeRef{char_ptr_type};
+                const fn_type = core.LLVMFunctionType(core.LLVMVoidType(), @ptrCast(&param_types[0]), param_types.len, 0);
+                const fn_val = try self.getRuntimeFunction(name, fn_type);
+
+                const final_args = [_]types.LLVMValueRef{args[0].value_ref};
+
+                _ = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 1, "");
+            },
+            .int_to_string => {
+                const name = "int_to_string";
+                var param_types = [_]types.LLVMTypeRef{core.LLVMInt32Type()};
+                const fn_type = core.LLVMFunctionType(char_ptr_type, @ptrCast(&param_types[0]), param_types.len, 0);
+                const fn_val = try self.getRuntimeFunction(name, fn_type);
+                const final_args = [_]types.LLVMValueRef{args[0].value_ref};
+
+                const str_ptr = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 1, "");
+
+                return TypedValueRef{
+                    .type = .String,
+                    .value_ref = str_ptr,
+                };
+            },
+            .float_to_string => {
+                const name = "float_to_string";
+                var param_types = [_]types.LLVMTypeRef{core.LLVMInt32Type()};
+                const fn_type = core.LLVMFunctionType(char_ptr_type, @ptrCast(&param_types[0]), param_types.len, 0);
+                const fn_val = try self.getRuntimeFunction(name, fn_type);
+                const final_args = [_]types.LLVMValueRef{args[0].value_ref};
+
+                const str_ptr = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 1, "");
+
+                return TypedValueRef{
+                    .type = .String,
+                    .value_ref = str_ptr,
+                };
+            },
+            .array_to_string => {
+                const name = "array_to_string";
+                var param_types = [_]types.LLVMTypeRef{
+                    core.LLVMPointerType(core.LLVMVoidType(), 0),
+                    core.LLVMInt32Type(),
+                    core.LLVMInt32Type(),
+                };
+                const fn_type = core.LLVMFunctionType(char_ptr_type, @ptrCast(&param_types[0]), param_types.len, 0);
+                const fn_val = try self.getRuntimeFunction(name, fn_type);
+                const final_args = [_]types.LLVMValueRef{ args[0].value_ref, args[1].value_ref, args[2].value_ref };
+
+                const str_ptr = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 3, "");
+
+                return TypedValueRef{
+                    .type = .String,
+                    .value_ref = str_ptr,
+                };
+            },
+            .string_length => {
+                const name = "string_length";
+                var param_types = [_]types.LLVMTypeRef{char_ptr_type};
+                const fn_type = core.LLVMFunctionType(core.LLVMInt32Type(), @ptrCast(&param_types[0]), param_types.len, 0);
+                const fn_val = try self.getRuntimeFunction(name, fn_type);
+                const final_args = [_]types.LLVMValueRef{args[0].value_ref};
+                return TypedValueRef{
+                    .type = .Integer,
+                    .value_ref = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 1, "strlen_result"),
+                };
+            },
+            else => unreachable,
+        }
+
+        return null;
+    }
+
+    fn getRuntimeFunction(self: *Generator, name: []const u8, fn_type: types.LLVMTypeRef) !types.LLVMValueRef {
+        var fn_val = core.LLVMGetNamedFunction(self.llvm_module, @ptrCast(name));
+        if (fn_val == null) {
+            fn_val = core.LLVMAddFunction(self.llvm_module, @ptrCast(name), fn_type);
+            core.LLVMSetLinkage(fn_val, .LLVMExternalLinkage);
+        }
+
+        return fn_val;
+    }
+
+    fn getArrayMetadata(self: *Generator, array: TypedValueRef) struct { length: TypedValueRef, capacity: TypedValueRef, data_ptr: TypedValueRef } {
+        if (array.type != .Array) @panic("trying to get metadata from a value that is not array");
+        var ptr_type: GenType = .Integer;
+        return .{
+            .length = .{
+                .type = .Integer,
+                .value_ref = core.LLVMBuildExtractValue(self.builder, array.value_ref.?, 0, "array_len"),
+            },
+            .capacity = .{
+                .type = .Integer,
+                .value_ref = core.LLVMBuildExtractValue(self.builder, array.value_ref.?, 1, "array_capacity"),
+            },
+            .data_ptr = .{
+                .type = .{ .Pointer = &ptr_type },
+                .value_ref = core.LLVMBuildExtractValue(self.builder, array.value_ref.?, 2, "array_data_ptr"),
+            },
+        };
+    }
+
+    fn createArrayStruct(self: *Generator, length: TypedValueRef, data_ptr: TypedValueRef) !TypedValueRef {
+        var header_values = try self.allocator.alloc(types.LLVMValueRef, 3);
+        defer self.allocator.free(header_values);
+        header_values[0] = length.value_ref;
+        header_values[1] = length.value_ref;
+        header_values[2] = data_ptr.value_ref;
+
+        return TypedValueRef{
+            .type = .Array,
+            .value_ref = core.LLVMConstStruct(@ptrCast(header_values), 3, 0),
+        };
+    }
+
+    fn launchKernel(self: *Generator, name: []const u8, inputs: types.LLVMValueRef, outputs: types.LLVMValueRef) !types.LLVMValueRef {
+        const global_ptx_str = self.kernels.get(name).?;
+
+        const char_type = core.LLVMInt8Type();
+        const char_ptr_type = core.LLVMPointerType(char_type, 0);
+        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+
+        const return_type = core.LLVMInt32Type();
+        var param_types = [_]types.LLVMTypeRef{
+            char_ptr_type,
+            char_ptr_type,
+            void_ptr_type,
+            core.LLVMInt32Type(),
+        };
+
+        const fn_type = core.LLVMFunctionType(return_type, &param_types, param_types.len, 0);
+
+        var run_cuda_kernel_fn = core.LLVMGetNamedFunction(self.llvm_module, "run_cuda_kernel");
+        if (run_cuda_kernel_fn == null) {
+            run_cuda_kernel_fn = core.LLVMAddFunction(self.llvm_module, "run_cuda_kernel", fn_type);
+        }
+
+        const int_type = core.LLVMInt32Type();
+
+        const n_val = core.LLVMConstInt(int_type, 4, 0);
+
+        var args = [_]types.LLVMValueRef{
+            core.LLVMBuildBitCast(self.builder, global_ptx_str, char_ptr_type, "ptx_code_ptr".ptr),
+            inputs,
+            outputs,
+            n_val,
+        };
+
+        return core.LLVMBuildCall2(self.builder, fn_type, run_cuda_kernel_fn, &args, args.len, "cuda_call".ptr);
+    }
+
+    fn addKernel(self: *Generator, name: []const u8, ptx: []const u8) !void {
+        const kernel_name = ptx;
+        const kernel_name_len = kernel_name.len;
+        const kernel_name_type = core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_name_len + 1));
+        const kernel_name_constant = core.LLVMConstString(@ptrCast(kernel_name), @intCast(kernel_name_len), 0);
+
+        const name_z = try self.allocator.dupeZ(u8, name);
+        defer self.allocator.free(name_z);
+
+        const global_ptx_str = core.LLVMAddGlobal(self.llvm_module, kernel_name_type, name_z.ptr);
+        try self.kernels.put(name, global_ptx_str);
+        core.LLVMSetInitializer(global_ptx_str, kernel_name_constant);
     }
 };

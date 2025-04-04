@@ -59,6 +59,14 @@ const char* array_to_string(void* array_ptr, int length, int elem_type) {
     return buffer;
 }
 
+int string_length(const char str[]) {
+    const char *s = str;
+    while (*s) {
+        s++;
+    }
+    return s - str + 100;
+}
+
 static CUdevice device;
 static CUcontext context;
 static CUmodule module;
@@ -158,7 +166,6 @@ int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
         fprintf(stderr, "cuMemcpyDtoH for d_output failed: %d\n", err);
         exit(1);
     }
-
 
     cuMemFree(d_input);
     cuMemFree(d_output);

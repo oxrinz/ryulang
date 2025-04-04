@@ -35,7 +35,9 @@ pub fn main() anyerror!void {
 
 fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     var llvm_emit = false;
-    var debug_mode = false;
+    var print_tokens = false;
+    var print_ast = false;
+    var print_kernel = false;
     var entry_file: ?[]const u8 = null;
 
     var i: usize = 0;
@@ -43,8 +45,12 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
         const arg = args[i];
         if (mem.eql(u8, arg, "--llvm-emit")) {
             llvm_emit = true;
-        } else if (mem.eql(u8, arg, "--debug")) {
-            debug_mode = true;
+        } else if (mem.eql(u8, arg, "--print-tokens")) {
+            print_tokens = true;
+        } else if (mem.eql(u8, arg, "--print-ast")) {
+            print_ast = true;
+        } else if (mem.eql(u8, arg, "--print-kernel")) {
+            print_kernel = true;
         } else if (entry_file == null and !mem.startsWith(u8, arg, "-")) {
             entry_file = arg;
         }
@@ -65,7 +71,7 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     var lexer = Lexer.init(allocator, source);
     lexer.scan();
 
-    if (debug_mode == true) {
+    if (print_tokens == true) {
         std.debug.print("\n======== Tokens ========\n", .{});
         for (lexer.tokens.items) |token| {
             std.debug.print("{s} '{?}' at line {d}\n", .{
@@ -79,14 +85,15 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
 
     var parser = try Parser.init(lexer.tokens.items, allocator);
     const module_definition = try parser.parse();
-    if (debug_mode == true) {
+    if (print_ast == true) {
         std.debug.print("\n======== Program ========\n", .{});
         try prettyprinter.printAst(allocator, &module_definition);
         std.debug.print("===========================\n", .{});
     }
 
     var generator = Generator.init(module_definition, allocator);
-    const module = try generator.generate();
+    const output = try generator.generate();
+    const module = output.llvm_module;
 
     if (llvm_emit == true) {
         std.debug.print("\n========= LLVM =========\n", .{});

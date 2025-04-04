@@ -16,7 +16,6 @@ pub const PTXBackend = struct {
     allocator: std.mem.Allocator,
     llvm_module: types.LLVMModuleRef,
     builder: types.LLVMBuilderRef,
-    kernels: std.StringHashMap(types.LLVMValueRef),
 
     // declare the cuda api functions
     pub fn init(allocator: std.mem.Allocator, gen: *Generator) PTXBackend {
@@ -77,59 +76,65 @@ pub const PTXBackend = struct {
             .allocator = allocator,
             .llvm_module = gen.*.llvm_module,
             .builder = gen.*.builder,
-            .kernels = std.StringHashMap(types.LLVMValueRef).init(allocator),
         };
     }
 
-    pub fn addKernel(self: *PTXBackend, name: []const u8, ptx: []const u8) !void {
-        const kernel_name = ptx;
-        const kernel_name_len = kernel_name.len;
-        const kernel_name_type = core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_name_len + 1));
-        const kernel_name_constant = core.LLVMConstString(@ptrCast(kernel_name), @intCast(kernel_name_len), 0);
+    pub fn generateKernel(self: *PTXBackend, function_definition: ast.FunctionDefinition) ![]const u8 {
+        _ = self;
+        _ = function_definition;
+        const ptx =
+            \\//
+            \\.version 7.5
+            \\.target sm_75
+            \\.address_size 64
+            \\
+            \\.visible .entry main(
+            \\    .param .u64 input_ptr,
+            \\    .param .u64 output_ptr,
+            \\    .param .u32 n
+            \\)
+            \\{
+            \\    .reg .b32       r<5>;
+            \\    .reg .b64       rd<5>;
+            \\    .reg .f32       f<3>;
+            \\    .reg .pred      p<2>;
+            \\
+            \\    // Get the thread ID
+            \\    ld.param.u64    rd1, [input_ptr];
+            \\    ld.param.u64    rd2, [output_ptr];
+            \\    ld.param.u32    r1, [n];
+            \\    
+            \\    // Calculate thread ID
+            \\    mov.u32         r2, %tid.x;
+            \\    mov.u32         r3, %ntid.x;
+            \\    mov.u32         r4, %ctaid.x;
+            \\    mad.lo.u32      r2, r4, r3, r2;
+            \\    
+            \\    // Check if thread ID is within bounds
+            \\    setp.ge.u32     p1, r2, r1;
+            \\    @p1 bra         EXIT;
+            \\    
+            \\    // Calculate input and output addresses
+            \\    cvt.u64.u32     rd3, r2;
+            \\    mul.wide.u32    rd3, r2, 4;      // 4 bytes per float
+            \\    add.u64         rd1, rd1, rd3;   // input_ptr + offset
+            \\    add.u64         rd2, rd2, rd3;   // output_ptr + offset
+            \\    
+            \\    // Load input value
+            \\    ld.global.f32   f1, [rd1];
+            \\    
+            \\    // Add constant 2.0 to the value
+            \\    mov.f32         f2, 0f40000000;  // 2.0 in hex floating point
+            \\    add.f32         f1, f1, f2;
+            \\    
+            \\    // Store result to output
+            \\    st.global.f32   [rd2], f1;
+            \\    
+            \\EXIT:
+            \\    ret;
+            \\}
+        ;
 
-        const name_z = try self.allocator.dupeZ(u8, name);
-        defer self.allocator.free(name_z);
-
-        const global_ptx_str = core.LLVMAddGlobal(self.llvm_module, kernel_name_type, name_z.ptr);
-        try self.kernels.put(name, global_ptx_str);
-        core.LLVMSetInitializer(global_ptx_str, kernel_name_constant);
-    }
-
-    pub fn launchKernel(self: *PTXBackend, name: []const u8, inputs: types.LLVMValueRef, outputs: types.LLVMValueRef) !types.LLVMValueRef {
-        const global_ptx_str = self.kernels.get(name).?;
-
-        const char_type = core.LLVMInt8Type();
-        const char_ptr_type = core.LLVMPointerType(char_type, 0);
-        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
-
-        const return_type = core.LLVMInt32Type();
-        var param_types = [_]types.LLVMTypeRef{
-            char_ptr_type,
-            char_ptr_type,
-            void_ptr_type,
-            void_ptr_type,
-            void_ptr_type,
-            core.LLVMInt32Type(),
-        };
-
-        const fn_type = core.LLVMFunctionType(return_type, &param_types, param_types.len, 0);
-
-        var run_cuda_kernel_fn = core.LLVMGetNamedFunction(self.llvm_module, "run_cuda_kernel");
-        if (run_cuda_kernel_fn == null) {
-            run_cuda_kernel_fn = core.LLVMAddFunction(self.llvm_module, "run_cuda_kernel", fn_type);
-        }
-
-        const int_type = core.LLVMInt32Type();
-
-        const n_val = core.LLVMConstInt(int_type, 4, 0);
-
-        var args = [_]types.LLVMValueRef{
-            core.LLVMBuildBitCast(self.builder, global_ptx_str, char_ptr_type, "ptx_code_ptr".ptr),
-            inputs,
-            outputs,
-            n_val,
-        };
-
-        return core.LLVMBuildCall2(self.builder, fn_type, run_cuda_kernel_fn, &args, args.len, "cuda_call".ptr);
+        return ptx;
     }
 };
