@@ -70,7 +70,6 @@ int string_length(const char str[]) {
 static CUdevice device;
 static CUcontext context;
 static CUmodule module;
-static int initialized = 0;
 
 void print_results(void *result, int n)
 {
@@ -82,25 +81,9 @@ void print_results(void *result, int n)
     }
 }
 
-// take ptx pointer as input
-// take an array of inputs as device pointers
-// take result pointer, also as device pointer
-// grid dimensions as raw values, 3 int array
-// ^ same with block dims
-// 
-// TODO: currently takes host pointers, change this
-int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
-{
-    CUresult err;
-    CUdevice device;
-    CUcontext context;
-    CUmodule module;
-    CUfunction kernel;
-    CUdeviceptr d_input, d_output;
-    void *input1 = inputs[0];
-    uint32_t param_n = 4;
-    size_t data_size = 4 * sizeof(float);
 
+void load_cuda_kernel(const char *ptx_code) {
+    CUresult err;
     err = cuInit(0);
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuInit failed: %d\n", err);
@@ -124,6 +107,22 @@ int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
         fprintf(stderr, "cuModuleLoadData failed: %d\n", err);
         exit(1);
     }
+}
+
+// take an array of inputs as device pointers
+// take result pointer, also as device pointer
+// grid dimensions as raw values, 3 int array
+// ^ same with block dims
+// 
+// TODO: currently takes host pointers, change this
+int run_cuda_kernel(void **inputs, void *result)
+{
+    CUresult err;
+    CUfunction kernel;
+    CUdeviceptr d_input, d_output;
+    void *input1 = inputs[0];
+    uint32_t param_n = 4;
+    size_t data_size = 4 * sizeof(float);
 
     err = cuModuleGetFunction(&kernel, module, "main");
     if (err != CUDA_SUCCESS) {

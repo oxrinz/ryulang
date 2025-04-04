@@ -32,6 +32,8 @@ const RuntimeFunction = enum {
     array_to_string,
     print_results,
     string_length,
+    run_cuda_kernel,
+    load_cuda_kernel,
 };
 
 pub const Generator = struct {
@@ -42,7 +44,7 @@ pub const Generator = struct {
     builder: types.LLVMBuilderRef,
     named_values: std.StringHashMap(TypedValueRef),
     ptx_backend: PTXBackend,
-    kernels: std.StringHashMap(types.LLVMValueRef),
+    kernel: std.ArrayList(u8),
 
     pub fn init(module: ast.Module, allocator: std.mem.Allocator) Generator {
         _ = target.LLVMInitializeNativeTarget();
@@ -66,9 +68,8 @@ pub const Generator = struct {
             .ptx_backend = undefined,
             .llvm_module = llvm_module,
             .llvm_context = core.LLVMContextCreate(),
-            .kernels = std.StringHashMap(types.LLVMValueRef).init(allocator),
+            .kernel = std.ArrayList(u8).init(allocator),
         };
-
         gen.ptx_backend = PTXBackend.init(allocator, &gen);
 
         return gen;
@@ -82,9 +83,34 @@ pub const Generator = struct {
         const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
         _ = core.LLVMBuildRet(self.builder, zero);
 
+        const kernel = try self.kernel.toOwnedSlice();
+        const kernel_len = kernel.len;
+        const kernel_type = core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_len + 1));
+        const kernel_constant = core.LLVMConstString(@ptrCast(kernel), @intCast(kernel_len), 0);
+
+        const name_z = try self.allocator.dupeZ(u8, "main");
+        defer self.allocator.free(name_z);
+
+        const global_ptx_str = core.LLVMAddGlobal(self.llvm_module, kernel_type, name_z.ptr);
+        core.LLVMSetInitializer(global_ptx_str, kernel_constant);
+
+        const main_fn = core.LLVMGetNamedFunction(self.llvm_module, "main");
+        const entry_block = core.LLVMGetEntryBasicBlock(main_fn);
+        const first_instr = core.LLVMGetFirstInstruction(entry_block);
+        core.LLVMPositionBuilderBefore(self.builder, first_instr);
+
+        var args = [_]TypedValueRef{
+            .{
+                .type = .Array,
+                .value_ref = global_ptx_str,
+            },
+        };
+
+        _ = try self.callRuntimeFunction(.load_cuda_kernel, &args);
+
         core.LLVMDisposeBuilder(self.builder);
 
-        return .{ .llvm_module = self.llvm_module, .ptx = "" };
+        return .{ .llvm_module = self.llvm_module, .ptx = kernel };
     }
 
     fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!void {
@@ -100,7 +126,7 @@ pub const Generator = struct {
             .function_definition => |function_definition| {
                 if (function_definition.type == .Device) {
                     const ptx = try self.ptx_backend.generateKernel(function_definition);
-                    try self.addKernel(function_definition.identifier, ptx);
+                    try self.addKernel(ptx);
                 } else {
                     const func_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), null, 0, 0);
                     const c_name = try self.allocator.dupeZ(u8, function_definition.identifier);
@@ -148,7 +174,18 @@ pub const Generator = struct {
                     const input_ptrs_ptr = core.LLVMBuildAlloca(self.builder, core.LLVMPointerType(float_type, 0), "input_ptrs_ptr");
                     _ = core.LLVMBuildStore(self.builder, input_ptr, input_ptrs_ptr);
 
-                    _ = try self.launchKernel(call.identifier, input_ptrs_ptr, result_ptr);
+                    var args = [_]TypedValueRef{
+                        .{
+                            .type = .Array,
+                            .value_ref = input_ptrs_ptr,
+                        },
+                        .{
+                            .type = .Array,
+                            .value_ref = result_ptr,
+                        },
+                    };
+
+                    _ = try self.callRuntimeFunction(.run_cuda_kernel, &args);
 
                     var gen_type: GenType = .Float;
                     return self.createArrayStruct(array_metadata.length, .{
@@ -399,6 +436,7 @@ pub const Generator = struct {
 
     fn callRuntimeFunction(self: *Generator, function: RuntimeFunction, args: []TypedValueRef) anyerror!?TypedValueRef {
         const char_ptr_type = core.LLVMPointerType(core.LLVMInt8Type(), 0);
+        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
 
         switch (function) {
             .print => {
@@ -469,6 +507,31 @@ pub const Generator = struct {
                     .value_ref = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 1, "strlen_result"),
                 };
             },
+            .run_cuda_kernel => {
+                const name = "run_cuda_kernel";
+                var param_types = [_]types.LLVMTypeRef{
+                    void_ptr_type,
+                    void_ptr_type,
+                };
+                const fn_type = core.LLVMFunctionType(core.LLVMInt32Type(), @ptrCast(&param_types[0]), param_types.len, 0);
+                const fn_val = try self.getRuntimeFunction(name, fn_type);
+
+                const final_args = [_]types.LLVMValueRef{
+                    args[0].value_ref,
+                    args[1].value_ref,
+                };
+
+                _ = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 2, "");
+            },
+            .load_cuda_kernel => {
+                const name = "load_cuda_kernel";
+                var param_types = [_]types.LLVMTypeRef{char_ptr_type};
+                const fn_type = core.LLVMFunctionType(core.LLVMVoidType(), @ptrCast(&param_types[0]), param_types.len, 0);
+                const fn_val = try self.getRuntimeFunction(name, fn_type);
+                const final_args = [_]types.LLVMValueRef{args[0].value_ref};
+
+                _ = core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(&final_args)), 1, "");
+            },
             else => unreachable,
         }
 
@@ -517,53 +580,7 @@ pub const Generator = struct {
         };
     }
 
-    fn launchKernel(self: *Generator, name: []const u8, inputs: types.LLVMValueRef, outputs: types.LLVMValueRef) !types.LLVMValueRef {
-        const global_ptx_str = self.kernels.get(name).?;
-
-        const char_type = core.LLVMInt8Type();
-        const char_ptr_type = core.LLVMPointerType(char_type, 0);
-        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
-
-        const return_type = core.LLVMInt32Type();
-        var param_types = [_]types.LLVMTypeRef{
-            char_ptr_type,
-            char_ptr_type,
-            void_ptr_type,
-            core.LLVMInt32Type(),
-        };
-
-        const fn_type = core.LLVMFunctionType(return_type, &param_types, param_types.len, 0);
-
-        var run_cuda_kernel_fn = core.LLVMGetNamedFunction(self.llvm_module, "run_cuda_kernel");
-        if (run_cuda_kernel_fn == null) {
-            run_cuda_kernel_fn = core.LLVMAddFunction(self.llvm_module, "run_cuda_kernel", fn_type);
-        }
-
-        const int_type = core.LLVMInt32Type();
-
-        const n_val = core.LLVMConstInt(int_type, 4, 0);
-
-        var args = [_]types.LLVMValueRef{
-            core.LLVMBuildBitCast(self.builder, global_ptx_str, char_ptr_type, "ptx_code_ptr".ptr),
-            inputs,
-            outputs,
-            n_val,
-        };
-
-        return core.LLVMBuildCall2(self.builder, fn_type, run_cuda_kernel_fn, &args, args.len, "cuda_call".ptr);
-    }
-
-    fn addKernel(self: *Generator, name: []const u8, ptx: []const u8) !void {
-        const kernel_name = ptx;
-        const kernel_name_len = kernel_name.len;
-        const kernel_name_type = core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_name_len + 1));
-        const kernel_name_constant = core.LLVMConstString(@ptrCast(kernel_name), @intCast(kernel_name_len), 0);
-
-        const name_z = try self.allocator.dupeZ(u8, name);
-        defer self.allocator.free(name_z);
-
-        const global_ptx_str = core.LLVMAddGlobal(self.llvm_module, kernel_name_type, name_z.ptr);
-        try self.kernels.put(name, global_ptx_str);
-        core.LLVMSetInitializer(global_ptx_str, kernel_name_constant);
+    fn addKernel(self: *Generator, ptx: []const u8) !void {
+        try self.kernel.appendSlice(ptx);
     }
 };
