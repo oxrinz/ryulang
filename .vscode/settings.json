@@ -6,6 +6,8 @@
         "initializer_list": "c",
         "stdlib.h": "c",
         "stdio.h": "c",
-        "cuda.h": "c"
+        "cuda.h": "c",
+        "type_traits": "c",
+        "utility": "c"
     }
 }

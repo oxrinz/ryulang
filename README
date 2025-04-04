@@ -1,11 +1,1 @@
-write low level production code in a pythonlike language without sacrificing performance or readability
-
-## Roadmap
-
-floats - done
-strings - done
-print() - done
-functions - done
-semantic analysis
-device parsing - done
-device fn kernels
+python for professionals

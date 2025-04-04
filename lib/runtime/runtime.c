@@ -27,6 +27,38 @@ const char *bool_to_string(int value)
     return value ? "true" : "false";
 }
 
+const char* array_to_string(void* array_ptr, int length, int elem_type) {
+    static char buffer[1024];
+    int offset = 0;
+    
+    buffer[offset++] = '[';
+    
+    for (int i = 0; i < length; i++) {
+        if (elem_type == 0) { 
+            int value = ((int*)array_ptr)[i];
+            offset += snprintf(buffer + offset, sizeof(buffer) - offset, "%d", value);
+        } 
+        else if (elem_type == 1) { 
+            float value = ((float*)array_ptr)[i];
+            offset += snprintf(buffer + offset, sizeof(buffer) - offset, "%f", value);
+        }
+        else if (elem_type == 2) {
+            const char* value = ((const char**)array_ptr)[i];
+            offset += snprintf(buffer + offset, sizeof(buffer) - offset, "\"%s\"", value);
+        }
+        
+        if (i < length - 1) {
+            buffer[offset++] = ',';
+            buffer[offset++] = ' ';
+        }
+    }
+    
+    buffer[offset++] = ']';
+    buffer[offset] = '\0';
+    
+    return buffer;
+}
+
 static CUdevice device;
 static CUcontext context;
 static CUmodule module;
@@ -47,9 +79,10 @@ void print_results(void *result, int n)
 // take result pointer, also as device pointer
 // grid dimensions as raw values, 3 int array
 // ^ same with block dims
+// 
+// TODO: currently takes host pointers, change this
 int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
 {
-    print("fucki");
     CUresult err;
     CUdevice device;
     CUcontext context;
@@ -57,7 +90,6 @@ int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
     CUfunction kernel;
     CUdeviceptr d_input, d_output;
     void *input1 = inputs[0];
-    float host_output[4];
     uint32_t param_n = 4;
     size_t data_size = 4 * sizeof(float);
 
@@ -121,20 +153,12 @@ int run_cuda_kernel(const char *ptx_code, void **inputs, void *result, int n)
     }
 
     // Copy output data from device to host
-    err = cuMemcpyDtoH(host_output, d_output, data_size);
+    err = cuMemcpyDtoH(result, d_output, data_size);
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuMemcpyDtoH for d_output failed: %d\n", err);
         exit(1);
     }
 
-    print("fuck");
-
-    // Print results
-    printf("Kernel results:\n");
-    for (int i = 0; i < 4; i++) {
-        printf("%.2f ", host_output[i]);
-    }
-    printf("\n");
 
     cuMemFree(d_input);
     cuMemFree(d_output);

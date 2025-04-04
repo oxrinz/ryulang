@@ -12,3 +12,5 @@ zig-cache/
 
 main.ryu
 gpu.ryu
+
+**/**.a

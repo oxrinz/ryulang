@@ -95,7 +95,7 @@ pub const PTXBackend = struct {
         core.LLVMSetInitializer(global_ptx_str, kernel_name_constant);
     }
 
-    pub fn launchKernel(self: *PTXBackend, name: []const u8, inputs: types.LLVMValueRef) !types.LLVMValueRef {
+    pub fn launchKernel(self: *PTXBackend, name: []const u8, inputs: types.LLVMValueRef, outputs: types.LLVMValueRef) !types.LLVMValueRef {
         const global_ptx_str = self.kernels.get(name).?;
 
         const char_type = core.LLVMInt8Type();
@@ -120,27 +120,13 @@ pub const PTXBackend = struct {
         }
 
         const int_type = core.LLVMInt32Type();
-        const float_type = core.LLVMFloatType();
-        const float_array_type = core.LLVMArrayType(float_type, 4);
-
-        const result_array = core.LLVMAddGlobal(self.llvm_module, float_array_type, "result_data".ptr);
-        var result_values: [4]types.LLVMValueRef = undefined;
 
         const n_val = core.LLVMConstInt(int_type, 4, 0);
-
-        for (0..4) |i| {
-            result_values[i] = core.LLVMConstReal(float_type, 0.0);
-        }
-
-        const result_constant_array = core.LLVMConstArray(float_type, &result_values, 4);
-        core.LLVMSetInitializer(result_array, result_constant_array);
-
-        const result_ptr = core.LLVMBuildBitCast(self.builder, result_array, void_ptr_type, "result_ptr".ptr);
 
         var args = [_]types.LLVMValueRef{
             core.LLVMBuildBitCast(self.builder, global_ptx_str, char_ptr_type, "ptx_code_ptr".ptr),
             inputs,
-            result_ptr,
+            outputs,
             n_val,
         };
 
