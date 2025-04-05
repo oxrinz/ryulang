@@ -300,13 +300,6 @@ pub const Generator = struct {
                 core.LLVMSetGlobalConstant(array_data_global, 1);
 
                 const i32_type = core.LLVMInt32Type();
-                const data_ptr_type = core.LLVMPointerType(element_type, 0);
-
-                var field_types = try self.allocator.alloc(types.LLVMTypeRef, 3);
-                defer self.allocator.free(field_types);
-                field_types[0] = i32_type; // length
-                field_types[1] = i32_type; // capacity
-                field_types[2] = data_ptr_type; // pointer to data
 
                 var pointer_type: GenType = .Float;
                 return self.createArrayStruct(
