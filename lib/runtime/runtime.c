@@ -83,6 +83,7 @@ void print_results(void *result, int n)
 
 
 void load_cuda_kernel(const char *ptx_code) {
+    print("loading cuda");
     CUresult err;
     err = cuInit(0);
     if (err != CUDA_SUCCESS) {
@@ -95,7 +96,7 @@ void load_cuda_kernel(const char *ptx_code) {
         fprintf(stderr, "cuDeviceGet failed: %d\n", err);
         exit(1);
     }
-
+ 
     err = cuCtxCreate(&context, 0, device);
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuCtxCreate failed: %d\n", err);
@@ -107,6 +108,7 @@ void load_cuda_kernel(const char *ptx_code) {
         fprintf(stderr, "cuModuleLoadData failed: %d\n", err);
         exit(1);
     }
+    print("loaded cuda");
 }
 
 // take an array of inputs as device pointers
@@ -115,14 +117,15 @@ void load_cuda_kernel(const char *ptx_code) {
 // ^ same with block dims
 // 
 // TODO: currently takes host pointers, change this
-int run_cuda_kernel(void **inputs, void *result)
+int run_cuda_kernel(void **inputs, unsigned int num_inputs, void *result, unsigned int *grid_dims, unsigned int *block_dims)
 {
+    print("YEA BITCH");
     CUresult err;
     CUfunction kernel;
     CUdeviceptr d_input, d_output;
     void *input1 = inputs[0];
-    uint32_t param_n = 4;
-    size_t data_size = 4 * sizeof(float);
+    uint32_t param_n = 6;
+    size_t data_size = 6 * sizeof(float);
 
     err = cuModuleGetFunction(&kernel, module, "main");
     if (err != CUDA_SUCCESS) {
@@ -150,16 +153,15 @@ int run_cuda_kernel(void **inputs, void *result)
     void* params[3] = {&d_input, &d_output, &param_n};
 
     err = cuLaunchKernel(kernel,
-                         1, 1, 1,   // grid dimensions: 1x1x1
-                         4, 1, 1,   // block dimensions: 4x1x1
+                         grid_dims[0], grid_dims[1], grid_dims[2],   // grid dimensions
+                         block_dims[0], block_dims[1], block_dims[2],   // block dimensions
                          0, NULL,   // shared memory bytes and stream
-                         params, NULL);  // kernel parameters and extra
+                         params, NULL); 
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuLaunchKernel failed: %d\n", err);
         exit(1);
     }
 
-    // Copy output data from device to host
     err = cuMemcpyDtoH(result, d_output, data_size);
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuMemcpyDtoH for d_output failed: %d\n", err);

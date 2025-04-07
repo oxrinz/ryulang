@@ -19,59 +19,6 @@ pub const PTXBackend = struct {
 
     // declare the cuda api functions
     pub fn init(allocator: std.mem.Allocator, gen: *Generator) PTXBackend {
-        const i8Type = core.LLVMInt8Type();
-        const i32Type = core.LLVMInt32Type();
-        const i64Type = core.LLVMInt64Type();
-        const i8PtrType = core.LLVMPointerType(i8Type, 0);
-
-        // cuInit
-        var cuInitParamTypes = [_]types.LLVMTypeRef{i32Type};
-        const cuInitFnType = core.LLVMFunctionType(i32Type, &cuInitParamTypes, 1, 0);
-        const cuInit = core.LLVMAddFunction(gen.*.llvm_module, "cuInit", cuInitFnType);
-        core.LLVMSetLinkage(cuInit, .LLVMExternalLinkage);
-
-        // cuDeviceGet
-        const i32PtrType = core.LLVMPointerType(i32Type, 0);
-        var cuDeviceGetParamTypes = [_]types.LLVMTypeRef{ i32PtrType, i32Type };
-        const cuDeviceGetFnType = core.LLVMFunctionType(i32Type, &cuDeviceGetParamTypes, 2, 0);
-        const cuDeviceGet = core.LLVMAddFunction(gen.*.llvm_module, "cuDeviceGet", cuDeviceGetFnType);
-        core.LLVMSetLinkage(cuDeviceGet, .LLVMExternalLinkage);
-
-        // cuCtxCreate
-        const i64PtrType = core.LLVMPointerType(i64Type, 0);
-        var cuCtxCreateParamTypes = [_]types.LLVMTypeRef{ i64PtrType, i32Type, i32Type };
-        const cuCtxCreateFnType = core.LLVMFunctionType(i32Type, &cuCtxCreateParamTypes, 3, 0);
-        const cuCtxCreate = core.LLVMAddFunction(gen.*.llvm_module, "cuCtxCreate_v2", cuCtxCreateFnType);
-        core.LLVMSetLinkage(cuCtxCreate, .LLVMExternalLinkage);
-
-        // cuModuleLoadData
-        var cuModuleLoadDataParamTypes = [_]types.LLVMTypeRef{ i64PtrType, i8PtrType };
-        const cuModuleLoadDataFnType = core.LLVMFunctionType(i32Type, &cuModuleLoadDataParamTypes, 2, 0);
-        const cuModuleLoadData = core.LLVMAddFunction(gen.*.llvm_module, "cuModuleLoadData", cuModuleLoadDataFnType);
-        core.LLVMSetLinkage(cuModuleLoadData, .LLVMExternalLinkage);
-
-        // cuModuleGetFunction
-        var cuModuleGetFunctionParamTypes = [_]types.LLVMTypeRef{ i64PtrType, i64Type, i8PtrType };
-        const cuModuleGetFunctionFnType = core.LLVMFunctionType(i32Type, &cuModuleGetFunctionParamTypes, 3, 0);
-        const cuModuleGetFunction = core.LLVMAddFunction(gen.*.llvm_module, "cuModuleGetFunction", cuModuleGetFunctionFnType);
-        core.LLVMSetLinkage(cuModuleGetFunction, .LLVMExternalLinkage);
-
-        // cuLaunchKernel
-        var cuLaunchKernelParamTypes = [_]types.LLVMTypeRef{ i64Type, i32Type, i32Type, i32Type, i32Type, i32Type, i32Type, i32Type, i64Type, i8PtrType, i8PtrType };
-        const cuLaunchKernelFnType = core.LLVMFunctionType(i32Type, &cuLaunchKernelParamTypes, 11, 0);
-        const cuLaunchKernel = core.LLVMAddFunction(gen.*.llvm_module, "cuLaunchKernel", cuLaunchKernelFnType);
-        core.LLVMSetLinkage(cuLaunchKernel, .LLVMExternalLinkage);
-
-        const deviceGlobal = core.LLVMAddGlobal(gen.*.llvm_module, i32Type, "cuda_device");
-        const contextGlobal = core.LLVMAddGlobal(gen.*.llvm_module, i64Type, "cuda_context");
-        const moduleGlobal = core.LLVMAddGlobal(gen.*.llvm_module, i64Type, "cuda_module");
-
-        const zeroI32 = core.LLVMConstInt(i32Type, 0, 0);
-        const zeroI64 = core.LLVMConstInt(i64Type, 0, 0);
-        core.LLVMSetInitializer(deviceGlobal, zeroI32);
-        core.LLVMSetInitializer(contextGlobal, zeroI64);
-        core.LLVMSetInitializer(moduleGlobal, zeroI64);
-
         return .{
             .allocator = allocator,
             .llvm_module = gen.*.llvm_module,
