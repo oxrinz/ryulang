@@ -83,7 +83,6 @@ void print_results(void *result, int n)
 
 
 void load_cuda_kernel(const char *ptx_code) {
-    print("loading cuda");
     CUresult err;
     err = cuInit(0);
     if (err != CUDA_SUCCESS) {
@@ -108,7 +107,6 @@ void load_cuda_kernel(const char *ptx_code) {
         fprintf(stderr, "cuModuleLoadData failed: %d\n", err);
         exit(1);
     }
-    print("loaded cuda");
 }
 
 // take an array of inputs as device pointers

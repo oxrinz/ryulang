@@ -11,6 +11,10 @@ const core = llvm.core;
 const process = std.process;
 const execution = llvm.engine;
 
+const DevicePointerRef = struct {
+    value_ref: types.LLVMValueRef,
+};
+
 const IntegerRef = struct {
     value_ref: types.LLVMValueRef,
 };
@@ -48,15 +52,36 @@ const StringArrayRef = struct {
     metadata: ArrayMetadata,
 };
 
+fn createArrayMethodsForUnion(comptime T: type) type {
+    return struct {
+        pub fn getValueRef(self: *const T) types.LLVMValueRef {
+            return switch (self.*) {
+                inline else => |val| val.value_ref,
+            };
+        }
+
+        pub fn getMetadata(self: *const T) ArrayMetadata {
+            return switch (self.*) {
+                inline else => |val| val.metadata,
+            };
+        }
+    };
+}
+
 const NumericArrayRef = union(enum) {
     Integer: IntegerArrayRef,
     Float: FloatArrayRef,
+
+    pub usingnamespace createArrayMethodsForUnion(@This());
 };
 
+// arrays are currently always expected to be pointers
 const GenericArrayRef = union(enum) {
     Integer: IntegerArrayRef,
     Float: FloatArrayRef,
     String: StringArrayRef,
+
+    pub usingnamespace createArrayMethodsForUnion(@This());
 };
 
 const IntegerPointerRef = struct {
@@ -71,18 +96,6 @@ const StringPointerRef = struct {
     value_ref: types.LLVMValueRef,
 };
 
-const IntegerArrayPointerRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const FloatArrayPointerRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const StringArrayPointerRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
 const GenericRef = union(enum) {
     Integer: IntegerRef,
     Float: FloatRef,
@@ -93,28 +106,6 @@ const GenericRef = union(enum) {
     IntegerPointer: IntegerPointerRef,
     FloatPointer: FloatPointerRef,
     StringPointer: StringPointerRef,
-    IntegerArrayPointer: IntegerArrayPointerRef,
-    FloatArrayPointer: FloatArrayPointerRef,
-    StringArrayPointer: StringArrayPointerRef,
-};
-
-const RuntimeFunction = enum {
-    print,
-    int_to_string,
-    float_to_string,
-    bool_to_string,
-    array_to_string,
-    print_results,
-    string_length,
-    run_cuda_kernel,
-    load_cuda_kernel,
-};
-
-const CudaFunction = enum {
-    mem_alloc,
-    mem_cpy_h_to_d,
-    mem_cpy_d_to_h,
-    mem_free,
 };
 
 pub const Generator = struct {
@@ -228,6 +219,7 @@ pub const Generator = struct {
         }
     }
 
+    // TODO: would be nice to split functions that have known return value and unknown into separate scripts
     fn generateExpression(self: *Generator, expr: ast.Expression) !GenericRef {
         switch (expr) {
             .binary => |binary| {
@@ -247,10 +239,6 @@ pub const Generator = struct {
                     const array_element_count = array.metadata.length;
                     const float_type = core.LLVMFloatType();
                     const result_ptr = core.LLVMBuildArrayMalloc(self.builder, float_type, array_element_count, "result_ptr");
-                    const input_ptr = array.value_ref;
-                    const input_ptrs_ptr = core.LLVMBuildAlloca(self.builder, core.LLVMPointerType(float_type, 0), "input_ptrs_ptr");
-                    _ = core.LLVMBuildStore(self.builder, input_ptr, input_ptrs_ptr);
-
                     const uint_type = core.LLVMInt32Type();
                     const grid_dims_type = core.LLVMArrayType(uint_type, 3);
                     const grid_dims_ptr = core.LLVMBuildAlloca(self.builder, grid_dims_type, "grid_dims_ptr");
@@ -284,7 +272,7 @@ pub const Generator = struct {
                     const three = core.LLVMConstInt(core.LLVMInt32Type(), 3, 0);
 
                     _ = try self.callRunCudaKernel(
-                        .{ .float = FloatArrayRef{ .value_ref = input_ptrs_ptr, .metadata = array.metadata } },
+                        .{ .float = FloatArrayRef{ .value_ref = array.value_ref, .metadata = array.metadata } },
                         IntegerRef{ .value_ref = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0) },
                         .{ .float = FloatArrayRef{ .value_ref = result_ptr, .metadata = array.metadata } },
                         IntegerArrayRef{
@@ -445,8 +433,8 @@ pub const Generator = struct {
             .IntegerArray, .FloatArray => {
                 print_char_pointer = try self.callArrayToString(
                     switch (arg_value) {
-                        .IntegerArray => .{ .integer = arg_value.IntegerArray },
-                        .FloatArray => .{ .float = arg_value.FloatArray },
+                        .IntegerArray => .{ .Integer = arg_value.IntegerArray },
+                        .FloatArray => .{ .Float = arg_value.FloatArray },
                         else => unreachable,
                     },
                 );
@@ -514,37 +502,19 @@ pub const Generator = struct {
         };
     }
 
-    fn callArrayToString(self: *Generator, array_ref: union(enum) { integer: IntegerArrayRef, float: FloatArrayRef, string: StringArrayRef }) !StringRef {
+    fn callArrayToString(self: *Generator, array_ref: GenericArrayRef) !StringRef {
         var param_types = [_]types.LLVMTypeRef{ core.LLVMPointerType(core.LLVMVoidType(), 0), core.LLVMInt32Type(), core.LLVMInt32Type() };
 
-        const ArrayInfo = struct {
-            value_ref: types.LLVMValueRef,
-            length: types.LLVMValueRef,
-            elem_type_int: u32,
-        };
-
-        const array_info: ArrayInfo = switch (array_ref) {
-            .float => |f| ArrayInfo{
-                .value_ref = f.value_ref,
-                .length = f.metadata.length,
-                .elem_type_int = 1,
-            },
-            .integer => |i| ArrayInfo{
-                .value_ref = i.value_ref,
-                .length = i.metadata.length,
-                .elem_type_int = 0,
-            },
-            .string => |s| ArrayInfo{
-                .value_ref = s.value_ref,
-                .length = s.metadata.length,
-                .elem_type_int = 2,
-            },
+        const elem_type_int: usize = switch (array_ref) {
+            .Float => 1,
+            .Integer => 0,
+            .String => 2,
         };
 
         var final_args = [_]types.LLVMValueRef{
-            array_info.value_ref,
-            array_info.length,
-            core.LLVMConstInt(core.LLVMInt32Type(), array_info.elem_type_int, 0),
+            array_ref.getValueRef(),
+            array_ref.getMetadata().length,
+            core.LLVMConstInt(core.LLVMInt32Type(), @intCast(elem_type_int), 0),
         };
 
         return StringRef{
@@ -567,11 +537,14 @@ pub const Generator = struct {
             .integer => |i| i.value_ref,
         };
 
+        const input_ptrs_ptr = core.LLVMBuildAlloca(self.builder, core.LLVMPointerType(core.LLVMFloatType(), 0), "input_ptrs_ptr");
+        _ = core.LLVMBuildStore(self.builder, inputs_value_ref, input_ptrs_ptr);
+
         const result_value_ref = switch (result) {
             .float => |f| f.value_ref,
             .integer => |i| i.value_ref,
         };
-        var final_args = [_]types.LLVMValueRef{ inputs_value_ref, num_inputs.value_ref, result_value_ref, grid_dims.value_ref, block_dims.value_ref };
+        var final_args = [_]types.LLVMValueRef{ input_ptrs_ptr, num_inputs.value_ref, result_value_ref, grid_dims.value_ref, block_dims.value_ref };
 
         _ = try self.callExternalFunction("run_cuda_kernel", core.LLVMInt32Type(), &param_types, &final_args);
     }
@@ -583,38 +556,32 @@ pub const Generator = struct {
         _ = try self.callExternalFunction("load_cuda_kernel", core.LLVMVoidType(), &param_types, &final_args);
     }
 
-    // fn callCuMemAlloc(self: *Generator, device_ptr: TypedValueRef.Pointer, bytesize: TypedValueRef.Integer) !void {
-    //     _ = self;
-    //     _ = device_ptr;
-    //     _ = bytesize;
-    // }
+    fn callCuMemAlloc(self: *Generator, device_ptr: DevicePointerRef, bytesize: IntegerRef) !void {
+        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+        var param_types = [_]types.LLVMTypeRef{ void_ptr_type, types.LLVMInt64Type() };
+        var final_args = [_]types.LLVMValueRef{ device_ptr.value_ref, bytesize.value_ref };
+        _ = try self.callExternalFunction("cuMemAlloc", core.LLVMInt32Type(), &param_types, &final_args);
+    }
 
-    // fn callCudaFunction(self: *Generator, function: CudaFunction, args: []TypedValueRef) anyerror!?TypedValueRef {
-    //     const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+    fn callCuCopyHToD(self: *Generator, device_ptr: DevicePointerRef, value: NumericArrayRef) !void {
+        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+        var param_types = [_]types.LLVMTypeRef{ types.LLVMInt64Type(), void_ptr_type, types.LLVMInt64Type() };
+        var final_args = [_]types.LLVMValueRef{ device_ptr.value_ref, value.getValueRef(), value.getMetadata().length };
+        _ = try self.callExternalFunction("cuMemcpyHtoD", core.LLVMInt32Type(), &param_types, &final_args);
+    }
 
-    //     switch (function) {
-    //         .mem_alloc => {
-    //             var param_types = [_]types.LLVMTypeRef{ void_ptr_type, types.LLVMInt64Type() };
-    //             var final_args = [_]types.LLVMValueRef{ args[0].value_ref, args[1].value_ref };
-    //             _ = try self.callExternalFunction("cuMemAlloc", core.LLVMInt32Type(), &param_types, &final_args);
-    //         },
-    //         .mem_copy_h_to_d => {
-    //             var param_types = [_]types.LLVMTypeRef{ types.LLVMInt64Type(), void_ptr_type, types.LLVMInt64Type() };
-    //             var final_args = [_]types.LLVMValueRef{ args[0].value_ref, args[1].value_ref, args[2].value_ref };
-    //             _ = try self.callExternalFunction("cuMemcpyHtoD", core.LLVMInt32Type(), &param_types, &final_args);
-    //         },
-    //         .mem_copy_d_to_h => {
-    //             var param_types = [_]types.LLVMTypeRef{ void_ptr_type, types.LLVMInt64Type(), types.LLVMInt64Type() };
-    //             var final_args = [_]types.LLVMValueRef{ args[0].value_ref, args[1].value_ref, args[2].value_ref };
-    //             _ = try self.callExternalFunction("cuMemcpyDtoH", core.LLVMInt32Type(), &param_types, &final_args);
-    //         },
-    //         .mem_free => {
-    //             var param_types = [_]types.LLVMTypeRef{types.LLVMInt64Type()};
-    //             var final_args = [_]types.LLVMValueRef{args[0].value_ref};
-    //             _ = try self.callExternalFunction("cuMemFree", core.LLVMInt32Type(), &param_types, &final_args);
-    //         },
-    //     }
-    // }
+    fn callCuCopyDToH(self: *Generator, device_ptr: DevicePointerRef, host_ptr: NumericArrayRef) !void {
+        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+        var param_types = [_]types.LLVMTypeRef{ types.LLVMInt64Type(), void_ptr_type, types.LLVMInt64Type() };
+        var final_args = [_]types.LLVMValueRef{ host_ptr.getValueRef(), device_ptr.value_ref, host_ptr.getMetadata().length };
+        _ = try self.callExternalFunction("cuMemcpyHtoD", core.LLVMInt32Type(), &param_types, &final_args);
+    }
+
+    fn callCuFree(self: *Generator, device_ptr: DevicePointerRef) !void {
+        var param_types = [_]types.LLVMTypeRef{types.LLVMInt64Type()};
+        var final_args = [_]types.LLVMValueRef{device_ptr.value_ref};
+        _ = try self.callExternalFunction("cuMemFree", core.LLVMInt32Type(), &param_types, &final_args);
+    }
 
     fn callExternalFunction(self: *Generator, name: []const u8, return_type: types.LLVMTypeRef, param_types: []types.LLVMTypeRef, args: []types.LLVMTypeRef) !types.LLVMValueRef {
         const fn_type = core.LLVMFunctionType(return_type, @ptrCast(@constCast(param_types)), @intCast(param_types.len), 0);
