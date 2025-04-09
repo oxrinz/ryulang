@@ -103,24 +103,38 @@ void load_cuda_kernel(const char *ptx_code) {
     }
 
     err = cuModuleLoadData(&module, ptx_code);
-    if (err != CUDA_SUCCESS) {
+    if (err != CUDA_SUCCESS) { 
         fprintf(stderr, "cuModuleLoadData failed: %d\n", err);
         exit(1);
     }
 }
 
+CUresult run_cu_mem_dtoh(void *host, CUdeviceptr device, size_t bytebount) {
+    CUresult err;
+    err = cuMemcpyDtoH(host, device, bytebount);
+    if (err != CUDA_SUCCESS) {
+        fprintf(stderr, "cuMemcpyDtoH for d_output failed: %d\n", err);
+        exit(1);
+    }
+    return err;
+}
+
+void print_cu_memcpy_dtoh_error(int code) {
+    printf("cuMemcpyDtoH fucked up, code: %d\n", code);
+}
+
 // take an array of inputs as device pointers
-// take result pointer, also as device pointer
+// take result pointer, also as device pointer 
 // grid dimensions as raw values, 3 int array
 // ^ same with block dims
 // 
 // TODO: currently takes host pointers, change this
-int run_cuda_kernel(void **inputs, unsigned int num_inputs, void *result, unsigned int *grid_dims, unsigned int *block_dims)
+int run_cuda_kernel(void **inputs, unsigned int num_inputs, CUdeviceptr *d_output, unsigned int *grid_dims, unsigned int *block_dims)
 {
-    print("YEA BITCH");
     CUresult err;
     CUfunction kernel;
-    CUdeviceptr d_input, d_output;
+    CUdeviceptr d_input;
+    void *result = malloc(6 * sizeof(float));
     void *input1 = inputs[0];
     uint32_t param_n = 6;
     size_t data_size = 6 * sizeof(float);
@@ -136,7 +150,7 @@ int run_cuda_kernel(void **inputs, unsigned int num_inputs, void *result, unsign
         fprintf(stderr, "cuMemAlloc for d_input failed: %d\n", err);
         exit(1);
     }
-    err = cuMemAlloc(&d_output, data_size);
+    err = cuMemAlloc(d_output, data_size);
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuMemAlloc for d_output failed: %d\n", err);
         exit(1);
@@ -148,7 +162,7 @@ int run_cuda_kernel(void **inputs, unsigned int num_inputs, void *result, unsign
         exit(1);
     }
 
-    void* params[3] = {&d_input, &d_output, &param_n};
+    void* params[3] = {&d_input, d_output, &param_n};
 
     err = cuLaunchKernel(kernel,
                          grid_dims[0], grid_dims[1], grid_dims[2],   // grid dimensions
@@ -160,14 +174,13 @@ int run_cuda_kernel(void **inputs, unsigned int num_inputs, void *result, unsign
         exit(1);
     }
 
-    err = cuMemcpyDtoH(result, d_output, data_size);
+    err = cuMemcpyDtoH(result, *d_output, data_size);
     if (err != CUDA_SUCCESS) {
         fprintf(stderr, "cuMemcpyDtoH for d_output failed: %d\n", err);
         exit(1);
     }
 
+    print_results(result, 6);
+
     cuMemFree(d_input);
-    cuMemFree(d_output);
-    cuModuleUnload(module);
-    cuCtxDestroy(context);
 }

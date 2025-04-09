@@ -14,8 +14,7 @@
             cudaSupport = true;
           };
         };
-      in
-      {
+      in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             cudatoolkit
@@ -29,13 +28,12 @@
           ];
           shellHook = ''
             export CUDA_PATH=${pkgs.cudatoolkit}
-            export LD_LIBRARY_PATH=${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:/run/opengl-driver/lib:$LD_LIBRARY_PATH
-            export LIBRARY_PATH=${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:$LIBRARY_PATH
+            export LD_LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:$LD_LIBRARY_PATH
+            export LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:$LIBRARY_PATH
             export C_INCLUDE_PATH=${pkgs.cudatoolkit}/include:${pkgs.llvm}/include:$C_INCLUDE_PATH
             export LLVM_PATH=${pkgs.llvm}
             export LLVM_CONFIG=${pkgs.llvm}/bin/llvm-config
           '';
         };
-      }
-    );
+      });
 }

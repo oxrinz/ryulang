@@ -238,7 +238,11 @@ pub const Generator = struct {
                     const array = gen_res.FloatArray;
                     const array_element_count = array.metadata.length;
                     const float_type = core.LLVMFloatType();
-                    const result_ptr = core.LLVMBuildArrayMalloc(self.builder, float_type, array_element_count, "result_ptr");
+                    const result_ptr = FloatArrayRef{
+                        .value_ref = core.LLVMBuildArrayMalloc(self.builder, float_type, array_element_count, "result_ptr"),
+                        .metadata = array.metadata,
+                    };
+                    const d_output = DevicePointerRef{ .value_ref = core.LLVMBuildAlloca(self.builder, core.LLVMInt64Type(), "device_ptr") };
                     const uint_type = core.LLVMInt32Type();
                     const grid_dims_type = core.LLVMArrayType(uint_type, 3);
                     const grid_dims_ptr = core.LLVMBuildAlloca(self.builder, grid_dims_type, "grid_dims_ptr");
@@ -257,7 +261,7 @@ pub const Generator = struct {
                     const block_dims_type = core.LLVMArrayType(uint_type, 3);
                     const block_dims_ptr = core.LLVMBuildAlloca(self.builder, block_dims_type, "block_dims_ptr");
 
-                    const block_dims = [_]u32{ 4, 1, 1 };
+                    const block_dims = [_]u32{ 6, 1, 1 };
                     for (0..3) |i| {
                         const val = core.LLVMConstInt(uint_type, block_dims[i], 0);
                         const idx = core.LLVMConstInt(core.LLVMInt32Type(), i, 0);
@@ -274,7 +278,7 @@ pub const Generator = struct {
                     _ = try self.callRunCudaKernel(
                         .{ .float = FloatArrayRef{ .value_ref = array.value_ref, .metadata = array.metadata } },
                         IntegerRef{ .value_ref = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0) },
-                        .{ .float = FloatArrayRef{ .value_ref = result_ptr, .metadata = array.metadata } },
+                        d_output,
                         IntegerArrayRef{
                             .value_ref = grid_dims_ptr,
                             .metadata = .{
@@ -290,7 +294,8 @@ pub const Generator = struct {
                             },
                         },
                     );
-                    return GenericRef{ .FloatArray = .{ .value_ref = result_ptr, .metadata = array.metadata } };
+                    _ = try self.callCuCopyDToH(d_output, .{ .Float = result_ptr });
+                    return GenericRef{ .FloatArray = result_ptr };
                 } else {
                     if (call.builtin == true) {
                         try self.generateBuiltInFunction(call);
@@ -399,7 +404,7 @@ pub const Generator = struct {
                 core.LLVMSetInitializer(array_data_global, array_data);
                 core.LLVMSetGlobalConstant(array_data_global, 1);
 
-                const len = core.LLVMConstInt(core.LLVMInt32Type(), constant.Array.len, 0);
+                const len = core.LLVMConstInt(core.LLVMInt64Type(), constant.Array.len, 0);
 
                 return GenericRef{
                     .FloatArray = FloatArrayRef{
@@ -526,7 +531,7 @@ pub const Generator = struct {
         self: *Generator,
         inputs: union(enum) { float: FloatArrayRef, integer: IntegerArrayRef },
         num_inputs: IntegerRef,
-        result: union(enum) { float: FloatArrayRef, integer: IntegerArrayRef },
+        d_output: DevicePointerRef,
         grid_dims: IntegerArrayRef,
         block_dims: IntegerArrayRef,
     ) !void {
@@ -540,11 +545,7 @@ pub const Generator = struct {
         const input_ptrs_ptr = core.LLVMBuildAlloca(self.builder, core.LLVMPointerType(core.LLVMFloatType(), 0), "input_ptrs_ptr");
         _ = core.LLVMBuildStore(self.builder, inputs_value_ref, input_ptrs_ptr);
 
-        const result_value_ref = switch (result) {
-            .float => |f| f.value_ref,
-            .integer => |i| i.value_ref,
-        };
-        var final_args = [_]types.LLVMValueRef{ input_ptrs_ptr, num_inputs.value_ref, result_value_ref, grid_dims.value_ref, block_dims.value_ref };
+        var final_args = [_]types.LLVMValueRef{ input_ptrs_ptr, num_inputs.value_ref, d_output.value_ref, grid_dims.value_ref, block_dims.value_ref };
 
         _ = try self.callExternalFunction("run_cuda_kernel", core.LLVMInt32Type(), &param_types, &final_args);
     }
@@ -570,11 +571,73 @@ pub const Generator = struct {
         _ = try self.callExternalFunction("cuMemcpyHtoD", core.LLVMInt32Type(), &param_types, &final_args);
     }
 
+    // fn callCuCopyDToH(self: *Generator, device_ptr: DevicePointerRef, host_ptr: NumericArrayRef) !void {
+    //     const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+    //     var param_types = [_]types.LLVMTypeRef{ void_ptr_type, core.LLVMInt64Type(), core.LLVMInt64Type() };
+    //     const length = host_ptr.getMetadata().length;
+    //     const four = core.LLVMConstInt(core.LLVMInt64Type(), 4, 0);
+    //     const size_in_bytes = core.LLVMBuildMul(self.builder, length, four, "size_in_bytes");
+    //     const dereferenced_value = core.LLVMBuildLoad2(self.builder, core.LLVMInt64Type(), device_ptr.value_ref, "dereferenced_device_ptr");
+    //     var final_args = [_]types.LLVMValueRef{ host_ptr.getValueRef(), dereferenced_value, size_in_bytes };
+    //     const ret_val = try self.callExternalFunction("cuMemcpyDtoH", core.LLVMInt32Type(), &param_types, &final_args);
+
+    //     const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
+    //     const cmp = core.LLVMBuildICmp(self.builder, .LLVMIntEQ, ret_val, zero, "cmp");
+    // }
+
     fn callCuCopyDToH(self: *Generator, device_ptr: DevicePointerRef, host_ptr: NumericArrayRef) !void {
         const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
-        var param_types = [_]types.LLVMTypeRef{ types.LLVMInt64Type(), void_ptr_type, types.LLVMInt64Type() };
-        var final_args = [_]types.LLVMValueRef{ host_ptr.getValueRef(), device_ptr.value_ref, host_ptr.getMetadata().length };
-        _ = try self.callExternalFunction("cuMemcpyHtoD", core.LLVMInt32Type(), &param_types, &final_args);
+        var param_types = [_]types.LLVMTypeRef{ void_ptr_type, core.LLVMInt64Type(), core.LLVMInt64Type() };
+        const length = host_ptr.getMetadata().length;
+        const four = core.LLVMConstInt(core.LLVMInt64Type(), 4, 0);
+        const size_in_bytes = core.LLVMBuildMul(self.builder, length, four, "size_in_bytes");
+        const dereferenced_value = core.LLVMBuildLoad2(self.builder, core.LLVMInt64Type(), device_ptr.value_ref, "dereferenced_device_ptr");
+
+        var final_args = [_]types.LLVMValueRef{ host_ptr.getValueRef(), dereferenced_value, size_in_bytes };
+
+        // Capture the return value of cuMemcpyDtoH
+        const ret_val = try self.callExternalFunction("cuMemcpyDtoH", core.LLVMInt32Type(), &param_types, &final_args);
+
+        // Check if the return value is 0 (CUDA_SUCCESS)
+        const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
+        const cmp = core.LLVMBuildICmp(self.builder, .LLVMIntEQ, ret_val, zero, "cmp");
+
+        // Create success and error blocks
+        const current_function = core.LLVMGetBasicBlockParent(core.LLVMGetInsertBlock(self.builder));
+        const success_block = core.LLVMAppendBasicBlock(current_function, "success");
+        const error_block = core.LLVMAppendBasicBlock(current_function, "error");
+
+        // Branch based on the comparison
+        _ = core.LLVMBuildCondBr(self.builder, cmp, success_block, error_block);
+
+        // Error block: Call runtime library's print function and exit
+        core.LLVMPositionBuilderAtEnd(self.builder, error_block);
+
+        // Declare print_cu_memcpy_dtoh_error
+        var print_param_types = [_]types.LLVMTypeRef{core.LLVMInt32Type()};
+        const print_error_type = core.LLVMFunctionType(core.LLVMVoidType(), &print_param_types, 1, 0);
+        var print_error_fn = core.LLVMGetNamedFunction(self.llvm_module, "print_cu_memcpy_dtoh_error");
+        if (print_error_fn == null) {
+            print_error_fn = core.LLVMAddFunction(self.llvm_module, "print_cu_memcpy_dtoh_error", print_error_type);
+            core.LLVMSetLinkage(print_error_fn, .LLVMExternalLinkage);
+        }
+
+        // Call print_cu_memcpy_dtoh_error with the error code
+        _ = core.LLVMBuildCall2(self.builder, print_error_type, print_error_fn, @constCast(&[_]types.LLVMValueRef{ret_val}), 1, "");
+
+        // Declare and call exit(1)
+        const exit_type = core.LLVMFunctionType(core.LLVMVoidType(), @constCast(&[_]types.LLVMTypeRef{core.LLVMInt32Type()}), 1, 0);
+        var exit_fn = core.LLVMGetNamedFunction(self.llvm_module, "exit");
+        if (exit_fn == null) {
+            exit_fn = core.LLVMAddFunction(self.llvm_module, "exit", exit_type);
+            core.LLVMSetLinkage(exit_fn, .LLVMExternalLinkage);
+        }
+        const exit_code = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0);
+        _ = core.LLVMBuildCall2(self.builder, exit_type, exit_fn, @constCast(&[_]types.LLVMValueRef{exit_code}), 1, "");
+        _ = core.LLVMBuildUnreachable(self.builder);
+
+        // Success block: Continue execution
+        core.LLVMPositionBuilderAtEnd(self.builder, success_block);
     }
 
     fn callCuFree(self: *Generator, device_ptr: DevicePointerRef) !void {

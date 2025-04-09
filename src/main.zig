@@ -229,6 +229,7 @@ fn emit(module: *llvm.types.LLVMOpaqueModule) !void {
         "program",
         tmp_file,
         "lib/runtime/libruntime.a",
+        "/run/opengl-driver/lib/libcuda.so",
         "-lcuda",
     };
 
