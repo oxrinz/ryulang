@@ -11,7 +11,19 @@ const core = llvm.core;
 const process = std.process;
 const execution = llvm.engine;
 
+const DeviceRef = struct {
+    value_ref: types.LLVMValueRef,
+};
+
 const DevicePointerRef = struct {
+    value_ref: types.LLVMValueRef,
+};
+
+const ContextRef = struct {
+    value_ref: types.LLVMValueRef,
+};
+
+const ModuleRef = struct {
     value_ref: types.LLVMValueRef,
 };
 
@@ -117,6 +129,10 @@ pub const Generator = struct {
     named_values: std.StringHashMap(GenericRef),
     ptx_backend: PTXBackend,
     kernel: std.ArrayList(u8),
+    cuda_error_block: ?types.LLVMBasicBlockRef = null,
+    cuda_device: ?DeviceRef = null,
+    cuda_context: ?ContextRef = null,
+    cuda_module: ?ModuleRef = null,
 
     pub fn init(module: ast.Module, allocator: std.mem.Allocator) Generator {
         _ = target.LLVMInitializeNativeTarget();
@@ -125,12 +141,6 @@ pub const Generator = struct {
 
         const llvm_module: types.LLVMModuleRef = core.LLVMModuleCreateWithName("main_module");
         const builder = core.LLVMCreateBuilder().?;
-
-        const main_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), null, 0, 0);
-        const main_func: types.LLVMValueRef = core.LLVMAddFunction(llvm_module, "main", main_type);
-
-        const main_entry: types.LLVMBasicBlockRef = core.LLVMAppendBasicBlock(main_func, "entry");
-        core.LLVMPositionBuilderAtEnd(builder, main_entry);
 
         var gen = Generator{
             .allocator = allocator,
@@ -148,6 +158,12 @@ pub const Generator = struct {
     }
 
     pub fn generate(self: *Generator) anyerror!struct { llvm_module: types.LLVMModuleRef, ptx: []const u8 } {
+        const main_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), null, 0, 0);
+        const main_func: types.LLVMValueRef = core.LLVMAddFunction(self.llvm_module, "main", main_type);
+
+        const main_entry: types.LLVMBasicBlockRef = core.LLVMAppendBasicBlock(main_func, "entry");
+        core.LLVMPositionBuilderAtEnd(self.builder, main_entry);
+
         for (self.module.block.items) |stmt| {
             try self.generateStatement(stmt);
         }
@@ -155,27 +171,18 @@ pub const Generator = struct {
         const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
         _ = core.LLVMBuildRet(self.builder, zero);
 
-        const kernel = try self.kernel.toOwnedSlice();
-        const kernel_len = kernel.len;
-        const kernel_type = core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_len + 1));
-        const kernel_constant = core.LLVMConstString(@ptrCast(kernel), @intCast(kernel_len), 0);
-
-        const name_z = try self.allocator.dupeZ(u8, "main");
-        defer self.allocator.free(name_z);
-
-        const global_ptx_str = core.LLVMAddGlobal(self.llvm_module, kernel_type, name_z.ptr);
-        core.LLVMSetInitializer(global_ptx_str, kernel_constant);
-
         const main_fn = core.LLVMGetNamedFunction(self.llvm_module, "main");
         const entry_block = core.LLVMGetEntryBasicBlock(main_fn);
         const first_instr = core.LLVMGetFirstInstruction(entry_block);
+
         core.LLVMPositionBuilderBefore(self.builder, first_instr);
 
-        _ = try self.callLoadCudaKernel(StringRef{ .value_ref = global_ptx_str });
+        try self.initializeCuda();
+        // _ = try self.callLoadCudaKernel(StringRef{ .value_ref = global_ptx_str });
 
         core.LLVMDisposeBuilder(self.builder);
 
-        return .{ .llvm_module = self.llvm_module, .ptx = kernel };
+        return .{ .llvm_module = self.llvm_module, .ptx = try self.kernel.toOwnedSlice() };
     }
 
     fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!void {
@@ -482,6 +489,17 @@ pub const Generator = struct {
         };
     }
 
+    fn initializeCuda(self: *Generator) !void {
+        try self.callCuInit();
+        try self.callCuDeviceGet();
+        try self.callCuContextCreate();
+        try self.callCuModuleLoadData();
+    }
+
+    fn runCudaKernel(self: *Generator) !void {
+        self.callCuModuleGetFunction();
+    }
+
     fn callPrint(self: *Generator, string: StringRef) !void {
         var param_types = [_]types.LLVMTypeRef{core.LLVMPointerType(core.LLVMInt8Type(), 0)};
         var final_args = [_]types.LLVMValueRef{string.value_ref};
@@ -489,12 +507,19 @@ pub const Generator = struct {
         _ = try self.callExternalFunction("print", core.LLVMVoidType(), &param_types, &final_args);
     }
 
+    fn callPrintCudaError(self: *Generator, error_code: IntegerRef, function: IntegerRef) !void {
+        var param_types = [_]types.LLVMTypeRef{ core.LLVMInt32Type(), core.LLVMInt32Type() };
+        var final_args = [_]types.LLVMValueRef{ error_code.value_ref, function.value_ref };
+
+        _ = try self.callExternalFunction("print_cuda_error", core.LLVMVoidType(), &param_types, &final_args);
+    }
+
     fn callIntToString(self: *Generator, integer: IntegerRef) !StringRef {
         var param_types = [_]types.LLVMTypeRef{core.LLVMInt32Type()};
         var final_args = [_]types.LLVMValueRef{integer.value_ref};
 
         return StringRef{
-            .value_ref = try self.callExternalFunction("float_to_string", core.LLVMPointerType(core.LLVMInt8Type(), 0), &param_types, &final_args),
+            .value_ref = try self.callExternalFunction("int_to_string", core.LLVMPointerType(core.LLVMInt8Type(), 0), &param_types, &final_args),
         };
     }
 
@@ -557,32 +582,77 @@ pub const Generator = struct {
         _ = try self.callExternalFunction("load_cuda_kernel", core.LLVMVoidType(), &param_types, &final_args);
     }
 
-    fn callCuMemAlloc(self: *Generator, device_ptr: DevicePointerRef, bytesize: IntegerRef) !void {
-        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
-        var param_types = [_]types.LLVMTypeRef{ void_ptr_type, types.LLVMInt64Type() };
-        var final_args = [_]types.LLVMValueRef{ device_ptr.value_ref, bytesize.value_ref };
-        _ = try self.callExternalFunction("cuMemAlloc", core.LLVMInt32Type(), &param_types, &final_args);
+    fn callCuInit(self: *Generator) !void {
+        var param_types = [_]types.LLVMTypeRef{core.LLVMInt32Type()};
+        var final_args = [_]types.LLVMValueRef{core.LLVMConstInt(core.LLVMInt32Type(), 0, 0)};
+
+        const ret = try self.callExternalFunction("cuInit", core.LLVMInt32Type(), &param_types, &final_args);
+        try self.cudaCheckError(ret, 0);
     }
 
-    fn callCuCopyHToD(self: *Generator, device_ptr: DevicePointerRef, value: NumericArrayRef) !void {
-        const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
-        var param_types = [_]types.LLVMTypeRef{ types.LLVMInt64Type(), void_ptr_type, types.LLVMInt64Type() };
-        var final_args = [_]types.LLVMValueRef{ device_ptr.value_ref, value.getValueRef(), value.getMetadata().length };
-        _ = try self.callExternalFunction("cuMemcpyHtoD", core.LLVMInt32Type(), &param_types, &final_args);
+    fn callCuDeviceGet(self: *Generator) !void {
+        self.cuda_device = DeviceRef{ .value_ref = core.LLVMBuildAlloca(self.builder, core.LLVMInt32Type(), "device") };
+        var param_types = [_]types.LLVMTypeRef{ core.LLVMPointerType(core.LLVMInt32Type(), 0), core.LLVMInt32Type() };
+        var final_args = [_]types.LLVMValueRef{ self.cuda_device.?.value_ref, core.LLVMConstInt(core.LLVMInt32Type(), 0, 0) };
+
+        const ret = try self.callExternalFunction("cuDeviceGet", core.LLVMInt32Type(), &param_types, &final_args);
+        try self.cudaCheckError(ret, 1);
     }
 
-    // fn callCuCopyDToH(self: *Generator, device_ptr: DevicePointerRef, host_ptr: NumericArrayRef) !void {
+    fn callCuContextCreate(self: *Generator) !void {
+        self.cuda_context = ContextRef{ .value_ref = core.LLVMBuildAlloca(self.builder, core.LLVMInt64Type(), "context") };
+
+        const device_val = core.LLVMBuildLoad2(self.builder, core.LLVMInt32Type(), self.cuda_device.?.value_ref, "load_device");
+        var param_types = [_]types.LLVMTypeRef{ core.LLVMPointerType(core.LLVMInt64Type(), 0), core.LLVMInt32Type(), core.LLVMInt32Type() };
+        var final_args = [_]types.LLVMValueRef{ self.cuda_context.?.value_ref, core.LLVMConstInt(core.LLVMInt32Type(), 0, 0), device_val };
+
+        const ret = try self.callExternalFunction("cuCtxCreate", core.LLVMInt32Type(), &param_types, &final_args);
+        try self.cudaCheckError(ret, 2);
+    }
+
+    fn callCuModuleLoadData(self: *Generator) !void {
+        self.cuda_module = ModuleRef{ .value_ref = core.LLVMBuildAlloca(self.builder, core.LLVMInt32Type(), "context") };
+
+        const kernel = try self.kernel.toOwnedSlice();
+        const kernel_len = kernel.len;
+        const kernel_type = core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_len + 1));
+        const kernel_constant = core.LLVMConstString(@ptrCast(kernel), @intCast(kernel_len), 0);
+
+        const name_z = try self.allocator.dupeZ(u8, "main");
+        defer self.allocator.free(name_z);
+
+        const global_ptx_str = core.LLVMAddGlobal(self.llvm_module, kernel_type, name_z.ptr);
+        core.LLVMSetInitializer(global_ptx_str, kernel_constant);
+
+        var param_types = [_]types.LLVMTypeRef{ core.LLVMPointerType(core.LLVMInt32Type(), 0), core.LLVMPointerType(core.LLVMInt32Type(), 0) };
+        var final_args = [_]types.LLVMValueRef{ self.cuda_module.?.value_ref, global_ptx_str };
+
+        const ret = try self.callExternalFunction("cuModuleLoadData", core.LLVMInt32Type(), &param_types, &final_args);
+        try self.cudaCheckError(ret, 3);
+    }
+
+    fn callCuModuleGetFunction(self: *Generator) !void {
+        const kernel = ModuleRef{ .value_ref = core.LLVMBuildAlloca(self.builder, core.LLVMInt32Type(), "kernel") };
+        // const device_val = core.LLVMBuildLoad2(self.builder, core.LLVMInt32Type(), self.cuda_device.?.value_ref, "load_device");
+
+        var param_types = [_]types.LLVMTypeRef{ core.LLVMPointerType(core.LLVMInt32Type(), 0), core.LLVMInt32Type(), core.LLVMPointerType(core.LLVMInt8Type(), 0) };
+        var final_args = [_]types.LLVMValueRef{kernel.value_ref};
+
+        _ = try self.callExternalFunction("cuModuleGetFunction", core.LLVMInt32Type(), &param_types, &final_args);
+    }
+
+    // fn callCuMemAlloc(self: *Generator, device_ptr: DevicePointerRef, bytesize: IntegerRef) !void {
     //     const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
-    //     var param_types = [_]types.LLVMTypeRef{ void_ptr_type, core.LLVMInt64Type(), core.LLVMInt64Type() };
-    //     const length = host_ptr.getMetadata().length;
-    //     const four = core.LLVMConstInt(core.LLVMInt64Type(), 4, 0);
-    //     const size_in_bytes = core.LLVMBuildMul(self.builder, length, four, "size_in_bytes");
-    //     const dereferenced_value = core.LLVMBuildLoad2(self.builder, core.LLVMInt64Type(), device_ptr.value_ref, "dereferenced_device_ptr");
-    //     var final_args = [_]types.LLVMValueRef{ host_ptr.getValueRef(), dereferenced_value, size_in_bytes };
-    //     const ret_val = try self.callExternalFunction("cuMemcpyDtoH", core.LLVMInt32Type(), &param_types, &final_args);
+    //     var param_types = [_]types.LLVMTypeRef{ void_ptr_type, types.LLVMInt64Type() };
+    //     var final_args = [_]types.LLVMValueRef{ device_ptr.value_ref, bytesize.value_ref };
+    //     _ = try self.callExternalFunction("cuMemAlloc", core.LLVMInt32Type(), &param_types, &final_args);
+    // }
 
-    //     const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
-    //     const cmp = core.LLVMBuildICmp(self.builder, .LLVMIntEQ, ret_val, zero, "cmp");
+    // fn callCuCopyHToD(self: *Generator, device_ptr: DevicePointerRef, value: NumericArrayRef) !void {
+    //     const void_ptr_type = core.LLVMPointerType(core.LLVMVoidType(), 0);
+    //     var param_types = [_]types.LLVMTypeRef{ types.LLVMInt64Type(), void_ptr_type, types.LLVMInt64Type() };
+    //     var final_args = [_]types.LLVMValueRef{ device_ptr.value_ref, value.getValueRef(), value.getMetadata().length };
+    //     _ = try self.callExternalFunction("cuMemcpyHtoD", core.LLVMInt32Type(), &param_types, &final_args);
     // }
 
     fn callCuCopyDToH(self: *Generator, device_ptr: DevicePointerRef, host_ptr: NumericArrayRef) !void {
@@ -592,58 +662,24 @@ pub const Generator = struct {
         const four = core.LLVMConstInt(core.LLVMInt64Type(), 4, 0);
         const size_in_bytes = core.LLVMBuildMul(self.builder, length, four, "size_in_bytes");
         const dereferenced_value = core.LLVMBuildLoad2(self.builder, core.LLVMInt64Type(), device_ptr.value_ref, "dereferenced_device_ptr");
-
         var final_args = [_]types.LLVMValueRef{ host_ptr.getValueRef(), dereferenced_value, size_in_bytes };
-
-        // Capture the return value of cuMemcpyDtoH
         const ret_val = try self.callExternalFunction("cuMemcpyDtoH", core.LLVMInt32Type(), &param_types, &final_args);
-
-        // Check if the return value is 0 (CUDA_SUCCESS)
-        const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
-        const cmp = core.LLVMBuildICmp(self.builder, .LLVMIntEQ, ret_val, zero, "cmp");
-
-        // Create success and error blocks
-        const current_function = core.LLVMGetBasicBlockParent(core.LLVMGetInsertBlock(self.builder));
-        const success_block = core.LLVMAppendBasicBlock(current_function, "success");
-        const error_block = core.LLVMAppendBasicBlock(current_function, "error");
-
-        // Branch based on the comparison
-        _ = core.LLVMBuildCondBr(self.builder, cmp, success_block, error_block);
-
-        // Error block: Call runtime library's print function and exit
-        core.LLVMPositionBuilderAtEnd(self.builder, error_block);
-
-        // Declare print_cu_memcpy_dtoh_error
-        var print_param_types = [_]types.LLVMTypeRef{core.LLVMInt32Type()};
-        const print_error_type = core.LLVMFunctionType(core.LLVMVoidType(), &print_param_types, 1, 0);
-        var print_error_fn = core.LLVMGetNamedFunction(self.llvm_module, "print_cu_memcpy_dtoh_error");
-        if (print_error_fn == null) {
-            print_error_fn = core.LLVMAddFunction(self.llvm_module, "print_cu_memcpy_dtoh_error", print_error_type);
-            core.LLVMSetLinkage(print_error_fn, .LLVMExternalLinkage);
-        }
-
-        // Call print_cu_memcpy_dtoh_error with the error code
-        _ = core.LLVMBuildCall2(self.builder, print_error_type, print_error_fn, @constCast(&[_]types.LLVMValueRef{ret_val}), 1, "");
-
-        // Declare and call exit(1)
-        const exit_type = core.LLVMFunctionType(core.LLVMVoidType(), @constCast(&[_]types.LLVMTypeRef{core.LLVMInt32Type()}), 1, 0);
-        var exit_fn = core.LLVMGetNamedFunction(self.llvm_module, "exit");
-        if (exit_fn == null) {
-            exit_fn = core.LLVMAddFunction(self.llvm_module, "exit", exit_type);
-            core.LLVMSetLinkage(exit_fn, .LLVMExternalLinkage);
-        }
-        const exit_code = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0);
-        _ = core.LLVMBuildCall2(self.builder, exit_type, exit_fn, @constCast(&[_]types.LLVMValueRef{exit_code}), 1, "");
-        _ = core.LLVMBuildUnreachable(self.builder);
-
-        // Success block: Continue execution
-        core.LLVMPositionBuilderAtEnd(self.builder, success_block);
+        try self.cudaCheckError(ret_val, 5);
     }
 
-    fn callCuFree(self: *Generator, device_ptr: DevicePointerRef) !void {
-        var param_types = [_]types.LLVMTypeRef{types.LLVMInt64Type()};
-        var final_args = [_]types.LLVMValueRef{device_ptr.value_ref};
-        _ = try self.callExternalFunction("cuMemFree", core.LLVMInt32Type(), &param_types, &final_args);
+    // fn callCuFree(self: *Generator, device_ptr: DevicePointerRef) !void {
+    //     var param_types = [_]types.LLVMTypeRef{types.LLVMInt64Type()};
+    //     var final_args = [_]types.LLVMValueRef{device_ptr.value_ref};
+    //     _ = try self.callExternalFunction("cuMemFree", core.LLVMInt32Type(), &param_types, &final_args);
+    // }
+
+    fn cudaCheckError(self: *Generator, ret_val: types.LLVMValueRef, function: i32) !void {
+        try self.initCudaErrorFunction();
+
+        var param_types = [_]types.LLVMTypeRef{ core.LLVMInt32Type(), core.LLVMInt32Type() };
+        var args = [_]types.LLVMValueRef{ ret_val, core.LLVMConstInt(core.LLVMInt32Type(), @intCast(function), 0) };
+        _ = try self.callExternalFunction("cudaCheckError", core.LLVMInt32Type(), param_types[0..], args[0..] // Arguments
+        );
     }
 
     fn callExternalFunction(self: *Generator, name: []const u8, return_type: types.LLVMTypeRef, param_types: []types.LLVMTypeRef, args: []types.LLVMTypeRef) !types.LLVMValueRef {
@@ -655,6 +691,47 @@ pub const Generator = struct {
         }
 
         return core.LLVMBuildCall2(self.builder, fn_type, fn_val, @ptrCast(@constCast(args)), @intCast(args.len), "");
+    }
+
+    fn initCudaErrorFunction(self: *Generator) !void {
+        if (core.LLVMGetNamedFunction(self.llvm_module, "cudaCheckError") != null) {
+            return;
+        }
+
+        const saved_block = core.LLVMGetInsertBlock(self.builder);
+
+        var param_types = [_]types.LLVMTypeRef{ core.LLVMInt32Type(), core.LLVMInt32Type() };
+        const fn_type = core.LLVMFunctionType(core.LLVMInt32Type(), &param_types, 2, 0);
+        const error_fn = core.LLVMAddFunction(self.llvm_module, "cudaCheckError", fn_type);
+
+        const entry = core.LLVMAppendBasicBlock(error_fn, "entry");
+        core.LLVMPositionBuilderAtEnd(self.builder, entry);
+
+        const ret_val = core.LLVMGetParam(error_fn, 0);
+        const fn_val = core.LLVMGetParam(error_fn, 1);
+        const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
+        const cmp = core.LLVMBuildICmp(self.builder, .LLVMIntEQ, ret_val, zero, "cmp");
+
+        const success_block = core.LLVMAppendBasicBlock(error_fn, "success");
+        const error_block = core.LLVMAppendBasicBlock(error_fn, "error");
+        _ = core.LLVMBuildCondBr(self.builder, cmp, success_block, error_block);
+
+        core.LLVMPositionBuilderAtEnd(self.builder, error_block);
+        try self.callPrintCudaError(.{ .value_ref = ret_val }, .{ .value_ref = fn_val });
+
+        const exit_fn_type = core.LLVMFunctionType(core.LLVMVoidType(), @constCast(&[_]types.LLVMTypeRef{core.LLVMInt32Type()}), 1, 0);
+        const exit_fn = core.LLVMGetNamedFunction(self.llvm_module, "exit") orelse
+            core.LLVMAddFunction(self.llvm_module, "exit", exit_fn_type);
+
+        const exit_code = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0);
+        var args = [_]types.LLVMValueRef{exit_code};
+        _ = core.LLVMBuildCall2(self.builder, exit_fn_type, exit_fn, &args, 1, "");
+        _ = core.LLVMBuildUnreachable(self.builder);
+
+        core.LLVMPositionBuilderAtEnd(self.builder, success_block);
+        _ = core.LLVMBuildRet(self.builder, core.LLVMConstInt(core.LLVMInt32Type(), 0, 0));
+
+        core.LLVMPositionBuilderAtEnd(self.builder, saved_block);
     }
 
     fn addKernel(self: *Generator, ptx: []const u8) !void {
