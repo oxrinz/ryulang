@@ -6,6 +6,7 @@
 void print(const char *str)
 {
     printf("%s\n", str);
+    fflush(stdout);
 }
 
 void print_cuda_error(int error_code, int function)
@@ -24,6 +25,21 @@ void print_cuda_error(int error_code, int function)
     case 3:
         printf("CUMODULELOADDATA Error: %d\n", error_code);
         break;
+    case 4:
+        printf("CUMEMALLOC Error: %d\n", error_code);
+        break;
+    case 5:
+        printf("CUMEMCPYHTOD Error: %d\n", error_code);
+        break;
+    case 6:
+        printf("CUMEMCPYDTOH Error: %d\n", error_code);
+        break;
+    case 7:
+        printf("CULAUNCHKERNEL Error: %d\n", error_code);
+        break;
+    case 8:
+        printf("CUMODULEGETFUNCTION Error: %d\n", error_code);
+        break;
     default:
         printf("CUDA Unknown function error: %d (Function: %d)\n", error_code, function);
         break;
@@ -31,6 +47,7 @@ void print_cuda_error(int error_code, int function)
 }
 const char *int_to_string(int value)
 {
+    print("JÄVLA");
     static char buffer[32];
     snprintf(buffer, sizeof(buffer), "%d", value);
     return buffer;
@@ -110,17 +127,6 @@ void print_results(void *result, int n)
     }
 }
 
-void cu_ctx_create(void *context, int whatever, long device)
-{
-    CUresult err = cuCtxCreate(context, 0, device);
-    if (err != CUDA_SUCCESS)
-    {
-        fprintf(stderr, "cuCtxCreate failed: %d\n", err);
-        exit(1);
-    }
-    fprintf(stderr, "cuCtxCreate not failed: %d\n", err);
-}
-
 void load_cuda_kernel(const char *ptx_code)
 {
     CUresult err;
@@ -187,34 +193,8 @@ int run_cuda_kernel(void **inputs, unsigned int num_inputs, CUdeviceptr *d_outpu
     uint32_t param_n = 6;
     size_t data_size = 6 * sizeof(float);
 
-    err = cuModuleGetFunction(&kernel, module, "main");
-    if (err != CUDA_SUCCESS)
-    {
-        fprintf(stderr, "cuModuleGetFunction failed: %d\n", err);
-        exit(1);
-    }
 
-    err = cuMemAlloc(&d_input, data_size);
-    if (err != CUDA_SUCCESS)
-    {
-        fprintf(stderr, "cuMemAlloc for d_input failed: %d\n", err);
-        exit(1);
-    }
-    err = cuMemAlloc(d_output, data_size);
-    if (err != CUDA_SUCCESS)
-    {
-        fprintf(stderr, "cuMemAlloc for d_output failed: %d\n", err);
-        exit(1);
-    }
-
-    err = cuMemcpyHtoD(d_input, input1, data_size);
-    if (err != CUDA_SUCCESS)
-    {
-        fprintf(stderr, "cuMemcpyHtoD for d_input failed: %d\n", err);
-        exit(1);
-    }
- 
-    void *params[3] = {&d_input, d_output, &param_n};
+    void *params[2] = {&d_input, d_output};
 
     err = cuLaunchKernel(kernel,
                          grid_dims[0], grid_dims[1], grid_dims[2],    // grid dimensions
@@ -227,14 +207,5 @@ int run_cuda_kernel(void **inputs, unsigned int num_inputs, CUdeviceptr *d_outpu
         exit(1);
     }
 
-    err = cuMemcpyDtoH(result, *d_output, data_size);
-    if (err != CUDA_SUCCESS)
-    {
-        fprintf(stderr, "cuMemcpyDtoH for d_output failed: %d\n", err);
-        exit(1);
-    }
-
     print_results(result, 6);
-
-    cuMemFree(d_input);
 }

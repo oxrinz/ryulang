@@ -14,6 +14,10 @@ const Generator = @import("gen.zig").Generator;
 
 const prettyprinter = @import("pretty-printer.zig");
 
+const c = @cImport({
+    @cInclude("string.h");
+});
+
 pub fn main() anyerror!void {
     var debug_allocator = std.heap.DebugAllocator(.{}){};
     var arena_instance = std.heap.ArenaAllocator.init(debug_allocator.allocator());
@@ -266,6 +270,19 @@ fn emit(module: *llvm.types.LLVMOpaqueModule) !void {
 
     if (run_result.stderr.len > 0) {
         std.debug.print("{s}\n", .{run_result.stderr});
+    }
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Program exited with code {}\n", .{code});
+            }
+        },
+        .Signal => |sig| {
+            const desc = c.strsignal(@intCast(sig));
+            std.debug.print("Program terminated by signal {d}: {s}\n", .{ sig, std.mem.span(desc) });
+        },
+        else => unreachable,
     }
 }
 

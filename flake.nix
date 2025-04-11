@@ -24,6 +24,7 @@
             gdb
             zig
             llvm
+            gcc13
             clang
           ];
           shellHook = ''
@@ -33,6 +34,7 @@
             export C_INCLUDE_PATH=${pkgs.cudatoolkit}/include:${pkgs.llvm}/include:$C_INCLUDE_PATH
             export LLVM_PATH=${pkgs.llvm}
             export LLVM_CONFIG=${pkgs.llvm}/bin/llvm-config
+            export PATH=${pkgs.gcc13}/bin:$PATH
           '';
         };
       });
