@@ -59,11 +59,12 @@ pub const Parser = struct {
                     return .{ .expr = expr.* };
                 }
                 const target = self.curr().literal.?.string;
+                const device_type = if (self.curr().type == .IDENTIFIER) ast.DeviceType.Host else ast.DeviceType.Device;
                 self.cursor += 1;
                 try self.expect(.EQUAL);
                 self.cursor += 1;
                 const expr = try self.parseExpression(0);
-                return ast.Statement{ .assign = ast.Assign{ .target = target, .value = expr.* } };
+                return ast.Statement{ .assign = ast.Assign{ .target = target, .value = expr.*, .type = device_type } };
             },
             .FN => {
                 self.cursor += 1;
@@ -123,14 +124,14 @@ pub const Parser = struct {
         switch (self.curr().type) {
             .STRING => {
                 expr.* = .{
-                    .constant = .{ .value = .{ .String = self.curr().literal.?.string } },
+                    .constant = .{ .String = self.curr().literal.?.string },
                 };
                 self.cursor += 1;
             },
             .NUMBER => {
                 const constant: ast.Value = switch (self.curr().literal.?) {
-                    .integer => .{ .value = .{ .Integer = self.curr().literal.?.integer } },
-                    .float => .{ .value = .{ .Float = self.curr().literal.?.float } },
+                    .integer => .{ .Integer = self.curr().literal.?.integer },
+                    .float => .{ .Float = self.curr().literal.?.float },
                     else => unreachable,
                 };
                 expr.* = .{
@@ -181,7 +182,7 @@ pub const Parser = struct {
                 }
                 self.cursor += 1;
 
-                expr.* = ast.Expression{ .constant = .{ .value = .{ .Array = try value_array.toOwnedSlice() } } };
+                expr.* = ast.Expression{ .constant = .{ .Array = try value_array.toOwnedSlice() } };
 
                 return expr;
             },
