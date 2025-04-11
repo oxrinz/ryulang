@@ -39,11 +39,14 @@ pub const ValueType = enum {
     Array,
 };
 
-pub const Value = union(ValueType) {
-    Integer: i32,
-    Float: f32,
-    String: []const u8,
-    Array: []Value,
+pub const Value = struct {
+    value: union(ValueType) {
+        Integer: i32,
+        Float: f32,
+        String: []const u8,
+        Array: []Value,
+    },
+    type: DeviceType = .Host,
 };
 
 pub const Binary = struct {

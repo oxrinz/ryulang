@@ -123,14 +123,14 @@ pub const Parser = struct {
         switch (self.curr().type) {
             .STRING => {
                 expr.* = .{
-                    .constant = .{ .String = self.curr().literal.?.string },
+                    .constant = .{ .value = .{ .String = self.curr().literal.?.string } },
                 };
                 self.cursor += 1;
             },
             .NUMBER => {
                 const constant: ast.Value = switch (self.curr().literal.?) {
-                    .integer => .{ .Integer = self.curr().literal.?.integer },
-                    .float => .{ .Float = self.curr().literal.?.float },
+                    .integer => .{ .value = .{ .Integer = self.curr().literal.?.integer } },
+                    .float => .{ .value = .{ .Float = self.curr().literal.?.float } },
                     else => unreachable,
                 };
                 expr.* = .{
@@ -181,7 +181,7 @@ pub const Parser = struct {
                 }
                 self.cursor += 1;
 
-                expr.* = ast.Expression{ .constant = .{ .Array = try value_array.toOwnedSlice() } };
+                expr.* = ast.Expression{ .constant = .{ .value = .{ .Array = try value_array.toOwnedSlice() } } };
 
                 return expr;
             },

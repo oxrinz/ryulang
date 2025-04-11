@@ -80,7 +80,7 @@ pub fn prettyPrintExpression(allocator: Allocator, writer: anytype, expression: 
     switch (expression) {
         .constant => |constant| {
             try writer.writeAll("Expression.constant: ");
-            switch (constant) {
+            switch (constant.value) {
                 .Integer => |i| try writer.print("Integer({})\n", .{i}),
                 .Float => |f| try writer.print("Float({})\n", .{f}),
                 .String => |s| try writer.print("String(\"{s}\")\n", .{s}),
