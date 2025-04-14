@@ -52,21 +52,18 @@ pub const Binary = struct {
     right: *Expression,
 };
 
-pub const DeviceType = enum {
-    Host,
-    Device,
-};
-
 pub const Variable = struct {
     identifier: []const u8,
-    type: DeviceType = .Host,
 };
 
 pub const Call = struct {
     identifier: []const u8,
     args: []*Expression,
-    type: DeviceType = .Host,
-    builtin: bool = false,
+};
+
+pub const RuntimeCall = struct {
+    function: fn (args: []Value) Expression,
+    args: []*Expression,
 };
 
 pub const Expression = union(enum) {
@@ -74,18 +71,17 @@ pub const Expression = union(enum) {
     binary: Binary,
     variable: Variable,
     call: Call,
+    runtime_call: RuntimeCall,
 };
 
 pub const Assign = struct {
     target: []const u8,
     value: Expression,
-    type: DeviceType = .Host,
 };
 
 pub const FunctionDefinition = struct {
     identifier: []const u8,
     args: []*Expression,
-    type: DeviceType = .Host,
     body: Block,
     returns: ?bool = null,
 };

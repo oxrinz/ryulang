@@ -40,18 +40,21 @@ pub const PTXBackend = struct {
             \\  .param .u64 output_ptr
             \\)
             \\{
-            \\  .reg .b32 %r<2>;
-            \\  .reg .b64 %rd<3>;
+            \\  .reg .b32 %r<3>;
+            \\  .reg .b64 %rd<7>;
             \\
             \\  ld.param.u64 %rd1, [input_ptr];
             \\  ld.param.u64 %rd2, [output_ptr];
             \\
-            \\  cvta.to.global.u64 %rd1, %rd1;
-            \\  cvta.to.global.u64 %rd2, %rd2;
+            \\  mov.u32 %r2, %tid.x;    
+            \\  cvt.u64.u32 %rd3, %r2;
+            \\  shl.b64 %rd4, %rd3, 2;
+            \\  
+            \\  add.u64 %rd5, %rd1, %rd4;
+            \\  add.u64 %rd6, %rd2, %rd4;
             \\
-            \\  ld.global.u32 %r1, [%rd1];
-            \\
-            \\  st.global.u32 [%rd2], %r1;
+            \\  ld.global.u32 %r1, [%rd5];
+            \\  st.global.u32 [%rd6], %r1;
             \\
             \\  ret;
             \\}

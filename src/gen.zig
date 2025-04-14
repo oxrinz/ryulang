@@ -273,11 +273,8 @@ pub const Generator = struct {
                     const int_type = core.LLVMInt32Type();
 
                     const result_ptr = FloatArrayRef{
-                        .value_ref = core.LLVMBuildArrayMalloc(self.builder, core.LLVMFloatType(), core.LLVMConstInt(core.LLVMInt32Type(), 3, 0), "result_ptr"),
-                        .metadata = .{
-                            .capacity = core.LLVMConstInt(core.LLVMInt32Type(), 3, 0),
-                            .length = core.LLVMConstInt(core.LLVMInt32Type(), 3, 0),
-                        },
+                        .value_ref = core.LLVMBuildArrayMalloc(self.builder, core.LLVMFloatType(), inputs[0].metadata.length, "result_ptr"),
+                        .metadata = inputs[0].metadata,
                     };
 
                     const function = try self.callCuModuleGetFunction();
