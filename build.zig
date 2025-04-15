@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) !void {
     clang_module.linkSystemLibrary("clang-18", .{});
 
     const exe = b.addExecutable(.{
-        .name = "ryuthon",
+        .name = "ryulang",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
