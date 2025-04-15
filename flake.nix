@@ -1,5 +1,5 @@
 {
-  description = "Zig + CUDA development environment";
+  description = "RyuLang";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
