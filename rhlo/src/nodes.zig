@@ -19,4 +19,9 @@ const Operation = struct {
     output_ids: []const usize,
 };
 
-const RHLOProgram = struct {};
+const RHLOProgram = struct {
+    tensor_store: []const Tensor,
+    ops: []const Operation,
+    input_ids: []const usize,
+    output_ids: []const usize,
+};
