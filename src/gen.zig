@@ -8,7 +8,6 @@ const target = llvm.target;
 const target_machine_mod = llvm.target_machine;
 const types = llvm.types;
 const core = llvm.core;
-const process = std.process;
 const execution = llvm.engine;
 
 const DeviceRef = struct {
