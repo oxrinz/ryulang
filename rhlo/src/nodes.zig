@@ -5,8 +5,10 @@ pub const DataType = enum {
     I32,
 };
 
+pub const Shape = []const usize;
+
 pub const Tensor = struct {
-    dimensions: []const usize,
+    dimensions: Shape,
     dtype: DataType,
 };
 

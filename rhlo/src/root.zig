@@ -19,12 +19,23 @@ pub fn execute(program: nodes.RHLOProgram, input_buffer: buffers.RHLOBuffer, out
     _ = output_buffer;
 }
 
-pub fn create_builder() Builder {
+pub fn createBuilder() Builder {
     return Builder.init(arena.allocator());
 }
 
+// this seems weird, but it'll make sense when we consider how the c api will work
+pub fn createShape(dims: []const usize) nodes.Shape {
+    return dims;
+}
+
 test "anoda one" {
-    _ = create_builder();
+    var builder = createBuilder();
+    const dtype = nodes.DataType.F32;
+    const shape: nodes.Shape = &[_]usize{5};
+    const param0 = try builder.paramemeter(dtype, shape);
+    const param1 = try builder.paramemeter(dtype, shape);
+
+    _ = try builder.opAdd(param0, param1);
 }
 
 test "fuck" {
