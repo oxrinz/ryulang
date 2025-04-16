@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const rhlo = @import("rhlo/rhlo.zig");
+const rhlo = @import("rhlo");
 
 const RHLOGen = struct {
     allocator: std.mem.Allocator,

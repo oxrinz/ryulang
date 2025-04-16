@@ -1,13 +1,12 @@
 .{
-    .name = .ryulang,
+    .name = .rhlo,
+
     .version = "0.0.0",
-    .fingerprint = 0xebc976b42ba297d6,
+
+    .fingerprint = 0xb2f375f19eaa9f66,
+
     .minimum_zig_version = "0.14.0",
-    .dependencies = .{
-        .rhlo = .{
-            .path = "rhlo",
-        },
-    },
+
     .paths = .{
         "build.zig",
         "build.zig.zon",

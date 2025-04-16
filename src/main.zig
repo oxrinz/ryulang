@@ -28,13 +28,15 @@ pub fn main() anyerror!void {
     const args = try process.argsAlloc(arena);
     const cmd = args[1];
     const cmd_args = args[2..];
+    _ = cmd;
+    _ = cmd_args;
 
-    if (mem.eql(u8, cmd, "run")) {
-        build(arena, cmd_args) catch {
-            diagnostics.printAll();
-            std.process.exit(0);
-        };
-    }
+    // if (mem.eql(u8, cmd, "run")) {
+    //     build(arena, cmd_args) catch {
+    //         diagnostics.printAll();
+    //         std.process.exit(0);
+    //     };
+    // }
 }
 
 fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
@@ -290,4 +292,8 @@ const ptx = @import("backends/ptx.zig");
 
 test {
     std.testing.refAllDeclsRecursive(@This());
+}
+
+test "all" {
+    _ = @import("rhlo-gen.zig");
 }

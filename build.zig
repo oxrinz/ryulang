@@ -30,13 +30,26 @@ pub fn build(b: *std.Build) !void {
     });
     clang_module.linkSystemLibrary("clang-18", .{});
 
-    const exe = b.addExecutable(.{
-        .name = "ryulang",
+    const rhlo_module = b.createModule(.{
+        .root_source_file = b.path("rhlo/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const main_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("llvm", b.modules.get("llvm").?);
+
+    main_module.addImport("llvm", b.modules.get("llvm").?);
+    main_module.addImport("rhlo", rhlo_module);
+
+    const exe = b.addExecutable(.{
+        .name = "ryulang",
+        .root_module = main_module,
+        .optimize = optimize,
+    });
 
     b.installArtifact(exe);
 
@@ -52,11 +65,9 @@ pub fn build(b: *std.Build) !void {
     run_step.dependOn(&run_cmd.step);
 
     const tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
+        .root_module = main_module,
         .optimize = optimize,
     });
-    tests.root_module.addImport("llvm", b.modules.get("llvm").?);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
