@@ -12,5 +12,6 @@ zig-cache/
 
 main.ryu
 gpu.ryu
+comp.sh
 
 **/**.a

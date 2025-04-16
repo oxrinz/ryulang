@@ -7,7 +7,7 @@ const types = llvm.types;
 const core = llvm.core;
 const execution = llvm.engine;
 
-pub const nodes = @import("nodes.zig");
+const nodes = @import("nodes.zig");
 pub const buffers = @import("buffers.zig");
 const Builder = @import("builder.zig").Builder;
 

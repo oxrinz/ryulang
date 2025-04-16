@@ -1,27 +1,39 @@
-const DataType = enum {
+const std = @import("std");
+
+pub const DataType = enum {
     F32,
     I32,
 };
 
-const Tensor = struct {
+pub const Tensor = struct {
     dimensions: []const usize,
     dtype: DataType,
 };
 
-const OperationKind = enum {
+pub const TensorRef = usize;
+
+pub const OperationKind = enum {
     Add,
-    Dot,
 };
 
-const Operation = struct {
+pub const Operation = struct {
     kind: OperationKind,
     input_ids: []const usize,
     output_ids: []const usize,
 };
 
-const RHLOProgram = struct {
-    tensor_store: []const Tensor,
-    ops: []const Operation,
-    input_ids: []const usize,
-    output_ids: []const usize,
+pub const RHLOProgram = struct {
+    tensor_store: std.ArrayList(Tensor),
+    ops: std.ArrayList(Operation),
+    input_ids: std.ArrayList(usize),
+    output_ids: std.ArrayList(usize),
+
+    pub fn init(allocator: std.mem.Allocator) !RHLOProgram {
+        return .{
+            .tensor_store = std.ArrayList(Tensor).init(allocator),
+            .ops = std.ArrayList(Operation).init(allocator),
+            .input_ids = std.ArrayList(usize).init(allocator),
+            .output_ids = std.ArrayList(usize).init(allocator),
+        };
+    }
 };
