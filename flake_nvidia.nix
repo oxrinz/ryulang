@@ -17,6 +17,10 @@
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
+            cudatoolkit
+            cudaPackages.cuda_cudart
+            cudaPackages.cuda_nvcc
+            cudaPackages.libcublas
             gdb
             zig
             llvm
@@ -24,9 +28,10 @@
             clang
           ];
           shellHook = ''
-            export LD_LIBRARY_PATH=${pkgs.llvm}/lib:$LD_LIBRARY_PATH
-            export LIBRARY_PATH=${pkgs.llvm}/lib:$LIBRARY_PATH
-            export C_INCLUDE_PATH=${pkgs.llvm}/include:$C_INCLUDE_PATH
+            export CUDA_PATH=${pkgs.cudatoolkit}
+            export LD_LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:$LD_LIBRARY_PATH
+            export LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:$LIBRARY_PATH
+            export C_INCLUDE_PATH=${pkgs.cudatoolkit}/include:${pkgs.llvm}/include:$C_INCLUDE_PATH
             export LLVM_PATH=${pkgs.llvm}
             export LLVM_CONFIG=${pkgs.llvm}/bin/llvm-config
             export PATH=${pkgs.gcc13}/bin:$PATH

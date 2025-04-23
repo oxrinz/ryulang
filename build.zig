@@ -1,35 +1,11 @@
 const std = @import("std");
+const llvm = @import("wrappers/llvm.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const llvm_module = b.addModule("llvm", .{
-        .root_source_file = b.path("src/llvm/llvm.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    llvm_module.addCMacro("_FILE_OFFSET_BITS", "64");
-    llvm_module.addCMacro("__STDC_CONSTANT_MACROS", "");
-    llvm_module.addCMacro("__STDC_FORMAT_MACROS", "");
-    llvm_module.addCMacro("__STDC_LIMIT_MACROS", "");
-    llvm_module.linkSystemLibrary("z", .{});
-
-    if (target.result.abi != .msvc)
-        llvm_module.link_libc = true
-    else
-        llvm_module.link_libcpp = true;
-
-    llvm_module.linkSystemLibrary("LLVM", .{});
-
-    const clang_module = b.addModule("clang", .{
-        .root_source_file = b.path("src/llvm/clang.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    clang_module.linkSystemLibrary("clang-18", .{});
-
+    _ = llvm.setupLLVMInBuild(b, target, optimize);
     const rhlo_module = b.createModule(.{
         .root_source_file = b.path("rhlo/src/root.zig"),
         .target = target,

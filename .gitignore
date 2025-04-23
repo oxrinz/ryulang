@@ -5,13 +5,13 @@ zig-out/
 /build/
 /build-*/
 /docgen_tmp/
+.vscode/
 
 zig-cache/
 
 .ryuthon-cache/
 
-main.ryu
-gpu.ryu
 comp.sh
+**.ryu
 
 **/**.a
