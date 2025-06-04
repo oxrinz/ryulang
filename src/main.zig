@@ -288,12 +288,10 @@ fn emit(module: *llvm.types.LLVMOpaqueModule) !void {
     }
 }
 
-const ptx = @import("backends/ptx.zig");
-
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
 
 test "all" {
-    _ = @import("rhlo-gen.zig");
+    _ = @import("rhlo");
 }
