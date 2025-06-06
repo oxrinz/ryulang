@@ -210,7 +210,6 @@ pub const Lexer = struct {
             else => {
                 if (self.isDigit(char)) return self.number();
 
-                std.debug.print("{}\n", .{self.isAlpha(char)});
                 if (self.isAlpha(char)) return self.identifier();
 
                 const msg = std.fmt.allocPrint(self.allocator, "unexpected character at line {}", .{self.currentLine}) catch @panic("try again");
