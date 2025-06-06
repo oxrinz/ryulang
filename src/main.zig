@@ -10,7 +10,7 @@ const Allocator = std.mem.Allocator;
 const diagnostics = @import("diagnostics.zig");
 const Lexer = @import("lexer.zig").Lexer;
 const Parser = @import("parser.zig").Parser;
-const Generator = @import("gen.zig").Generator;
+const Generator = @import("rir-gen.zig").Generator;
 
 const prettyprinter = @import("pretty-printer.zig");
 

@@ -5,7 +5,7 @@
   <img alt="tiny corp logo" src="/ryu!.png" width="50%" height="50%" />
 </picture>
 
-Reimagining how machine learning development workflow should look like
+Reimagining what machine learning development workflow should look like
 </div>
 
 ---

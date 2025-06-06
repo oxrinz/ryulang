@@ -1,5 +1,10 @@
 const std = @import("std");
-const ast = @import("ast.zig");
+
+const ast = @import("../frontend/ast.zig");
+const rir = @import("rir.zig");
+
+const builder_script = @import("builder.zig");
+const Builder = builder_script.Builder;
 
 const rhlo = @import("rhlo");
 const rllvm = @import("rllvm");
@@ -9,163 +14,46 @@ const types = rllvm.llvm.types;
 const core = rllvm.llvm.core;
 const execution = rllvm.llvm.engine;
 
-const ContextRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const ModuleRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const IntegerRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const FloatRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const StringRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const NumericRef = union(enum) {
-    Integer: IntegerRef,
-    Float: FloatRef,
-};
-
-const ArrayMetadata = struct {
-    length: types.LLVMValueRef,
-    capacity: types.LLVMValueRef,
-};
-
-const IntegerArrayRef = struct {
-    value_ref: types.LLVMValueRef,
-    metadata: ArrayMetadata,
-};
-
-const FloatArrayRef = struct {
-    value_ref: types.LLVMValueRef,
-    metadata: ArrayMetadata,
-};
-
-const StringArrayRef = struct {
-    value_ref: types.LLVMValueRef,
-    metadata: ArrayMetadata,
-};
-
-fn createArrayMethodsForUnion(comptime T: type) type {
-    return struct {
-        pub fn getValueRef(self: *const T) types.LLVMValueRef {
-            return switch (self.*) {
-                inline else => |val| val.value_ref,
-            };
-        }
-
-        pub fn getMetadata(self: *const T) ArrayMetadata {
-            return switch (self.*) {
-                inline else => |val| val.metadata,
-            };
-        }
-    };
-}
-
-const NumericArrayRef = union(enum) {
-    Integer: IntegerArrayRef,
-    Float: FloatArrayRef,
-
-    pub usingnamespace createArrayMethodsForUnion(@This());
-};
-
-// arrays are currently always expected to be pointers
-const GenericArrayRef = union(enum) {
-    Integer: IntegerArrayRef,
-    Float: FloatArrayRef,
-    String: StringArrayRef,
-
-    pub usingnamespace createArrayMethodsForUnion(@This());
-};
-
-const IntegerPointerRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const FloatPointerRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const StringPointerRef = struct {
-    value_ref: types.LLVMValueRef,
-};
-
-const GenericRef = union(enum) {
-    Integer: IntegerRef,
-    Float: FloatRef,
-    String: StringRef,
-    IntegerArray: IntegerArrayRef,
-    FloatArray: FloatArrayRef,
-    StringArray: StringArrayRef,
-    IntegerPointer: IntegerPointerRef,
-    FloatPointer: FloatPointerRef,
-    StringPointer: StringPointerRef,
-};
-
 pub const Generator = struct {
     allocator: std.mem.Allocator,
     module: ast.Module,
-    llvm_module: types.LLVMModuleRef,
-    llvm_context: types.LLVMContextRef,
-    builder: types.LLVMBuilderRef,
-    named_values: std.StringHashMap(GenericRef),
+    builder: Builder,
 
     pub fn init(module: ast.Module, allocator: std.mem.Allocator) Generator {
         _ = target.LLVMInitializeNativeTarget();
         _ = target.LLVMInitializeNativeAsmPrinter();
         _ = target.LLVMInitializeNativeAsmParser();
 
-        const llvm_module: types.LLVMModuleRef = core.LLVMModuleCreateWithName("main_module");
-        const builder = core.LLVMCreateBuilder().?;
-
         const gen = Generator{
             .allocator = allocator,
             .module = module,
-            .builder = builder,
-            .named_values = std.StringHashMap(GenericRef).init(allocator),
-            .llvm_module = llvm_module,
-            .llvm_context = core.LLVMContextCreate(),
+            .builder = Builder.init(allocator),
         };
 
         return gen;
     }
 
     pub fn generate(self: *Generator) anyerror!types.LLVMModuleRef {
-        const main_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), null, 0, 0);
-        const main_func: types.LLVMValueRef = core.LLVMAddFunction(self.llvm_module, "main", main_type);
-
-        const main_entry: types.LLVMBasicBlockRef = core.LLVMAppendBasicBlock(main_func, "entry");
-        core.LLVMPositionBuilderAtEnd(self.builder, main_entry);
-
         for (self.module.block.items) |stmt| {
             try self.generateStatement(stmt);
         }
 
         const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
 
-        _ = core.LLVMBuildRet(self.builder, zero);
-        core.LLVMDisposeBuilder(self.builder);
+        _ = core.LLVMBuildRet(self.llvmBuilder, zero);
+        core.LLVMDisposeBuilder(self.llvmBuilder);
 
         return self.llvm_module;
     }
 
     fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!void {
-        _ = self;
         switch (statement) {
             .expr => |expr| {
                 _ = expr;
                 unreachable;
             },
             .assign => |assign| {
-                _ = assign;
+                try self.generateExpression(assign.value);
                 unreachable;
             },
             .function_definition => |function_definition| {
@@ -179,22 +67,21 @@ pub const Generator = struct {
     }
 
     // TODO: would be nice to split functions that have known return value and unknown into separate scripts
-    fn generateExpression(self: *Generator, expr: ast.Expression) !GenericRef {
+    fn generateExpression(self: *Generator, expr: ast.Expression) ![]const u8 {
+        _ = self;
         switch (expr) {
             .binary => |binary| {
-                const result = try self.generateBinary(binary);
-                return switch (result) {
-                    .Integer => GenericRef{ .Integer = result.Integer },
-                    .Float => GenericRef{ .Float = result.Float },
-                };
+                _ = binary;
+                unreachable;
             },
             .constant => |constant| {
-                return try self.generateConstant(constant);
+                _ = constant;
+                unreachable;
             },
             .call => |call| {
                 _ = call;
-                // TODO: implement host function calls
                 unreachable;
+                // TODO: implement host function calls
                 // const c_name = try self.allocator.dupeZ(u8, call.identifier);
                 // defer self.allocator.free(c_name);
 
@@ -206,7 +93,7 @@ pub const Generator = struct {
                 // if (call.args.len == 0) {
                 //     const fn_type = core.LLVMFunctionType(return_type, null, 0, 0);
 
-                //     return_value_ref = core.LLVMBuildCall2(self.builder, fn_type, func, null, 0, "");
+                //     return_value_ref = core.LLVMBuildCall2(self.llvmBuilder, fn_type, func, null, 0, "");
                 // } else {
                 //     var arg_values = try self.allocator.alloc(types.LLVMValueRef, call.args.len);
                 //     defer self.allocator.free(arg_values);
@@ -218,17 +105,14 @@ pub const Generator = struct {
 
                 //     const fn_type = core.LLVMFunctionType(return_type, null, 0, 0);
 
-                //     return_value_ref = core.LLVMBuildCall2(self.builder, fn_type, func, &arg_values[0], @intCast(arg_values.len), "");
+                //     return_value_ref = core.LLVMBuildCall2(self.llvmBuilder, fn_type, func, &arg_values[0], @intCast(arg_values.len), "");
                 // }
 
                 // return switch(call.)
 
             },
             .variable => |variable| {
-                const value = self.named_values.get(variable.identifier) orelse {
-                    @panic("Use of undefined variable");
-                };
-                return value;
+                return variable.identifier;
             },
         }
     }
@@ -341,12 +225,12 @@ pub const Generator = struct {
         switch (left) {
             .Float => {
                 return NumericRef{ .Float = .{
-                    .value_ref = float_fn(self.builder, left.Float.value_ref, right.Float.value_ref, ""),
+                    .value_ref = float_fn(self.llvmBuilder, left.Float.value_ref, right.Float.value_ref, ""),
                 } };
             },
             .Integer => {
                 return NumericRef{ .Integer = .{
-                    .value_ref = int_fn(self.builder, left.Integer.value_ref, right.Integer.value_ref, ""),
+                    .value_ref = int_fn(self.llvmBuilder, left.Integer.value_ref, right.Integer.value_ref, ""),
                 } };
             },
             else => @panic("unsupported binary operation"),

@@ -1,23 +1,66 @@
 const std = @import("std");
 
-const nodes = @import("nodes.zig");
+pub const DataType = enum {
+    F32,
+    I32,
+};
+
+pub const Shape = []const usize;
+
+pub const Tensor = struct {
+    dimensions: Shape,
+    dtype: DataType,
+};
+
+pub const TensorRef = usize;
+
+pub const OperationKind = enum {
+    Add,
+    Matmul,
+};
+
+pub const Operation = struct {
+    kind: OperationKind,
+    input_ids: []const usize,
+    output_ids: []const usize,
+};
+
+pub const Parameter = struct {
+    id: usize,
+    input: bool = false,
+    output: bool = false,
+};
+
+pub const RyuProgram = struct {
+    tensor_store: std.ArrayList(Tensor),
+    ops: std.ArrayList(Operation),
+    params: std.ArrayList(Parameter),
+
+    pub fn init(allocator: std.mem.Allocator) !RyuProgram {
+        return .{
+            .tensor_store = std.ArrayList(Tensor).init(allocator),
+            .ops = std.ArrayList(Operation).init(allocator),
+            .params = std.ArrayList(Parameter).init(allocator),
+        };
+    }
+};
 
 pub const Builder = struct {
     allocator: std.mem.Allocator,
-    program: nodes.RHLOProgram,
+    program: RyuProgram,
 
     pub fn init(allocator: std.mem.Allocator) Builder {
         return .{
             .allocator = allocator,
-            .program = try nodes.RHLOProgram.init(allocator),
+            .program = try RyuProgram.init(allocator),
         };
     }
 
-    pub fn createParameterFromRef(self: *Builder, ref: nodes.TensorRef) !void {
+    pub fn createParameterFromRef(self: *Builder, ref: TensorRef) !void {
         try self.program.params.append(.{ .id = ref, .output = true });
     }
 
-    pub fn createParameter(self: *Builder, dtype: nodes.DataType, shape: nodes.Shape) !nodes.TensorRef {
+    pub fn createParameter(self: *Builder, dtype: DataType, shape: Shape) !TensorRef {
         const param_id = self.program.tensor_store.items.len;
         try self.program.tensor_store.append(.{
             .dtype = dtype,
@@ -28,7 +71,7 @@ pub const Builder = struct {
         return param_id;
     }
 
-    pub fn opAdd(self: *Builder, a: nodes.TensorRef, b: nodes.TensorRef) !nodes.TensorRef {
+    pub fn opAdd(self: *Builder, a: TensorRef, b: TensorRef) !TensorRef {
         const tensor_store = self.program.tensor_store.items;
         const a_tensor = tensor_store[a];
         const b_tensor = tensor_store[b];
@@ -57,7 +100,7 @@ pub const Builder = struct {
         return output_id;
     }
 
-    pub fn opMatmul(self: *Builder, a: nodes.TensorRef, b: nodes.TensorRef) !nodes.TensorRef {
+    pub fn opMatmul(self: *Builder, a: TensorRef, b: TensorRef) !TensorRef {
         const tensor_store = self.program.tensor_store.items;
         const a_tensor = tensor_store[a];
         const b_tensor = tensor_store[b];
