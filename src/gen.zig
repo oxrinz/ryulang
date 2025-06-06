@@ -117,9 +117,6 @@ pub const Generator = struct {
     llvm_context: types.LLVMContextRef,
     builder: types.LLVMBuilderRef,
     named_values: std.StringHashMap(GenericRef),
-    kernel: std.ArrayList(u8),
-
-    global_ptx_str: ?types.LLVMValueRef = null,
 
     pub fn init(module: ast.Module, allocator: std.mem.Allocator) Generator {
         _ = target.LLVMInitializeNativeTarget();
@@ -134,16 +131,14 @@ pub const Generator = struct {
             .module = module,
             .builder = builder,
             .named_values = std.StringHashMap(GenericRef).init(allocator),
-            .ptx_backend = undefined,
             .llvm_module = llvm_module,
             .llvm_context = core.LLVMContextCreate(),
-            .kernel = std.ArrayList(u8).init(allocator),
         };
 
         return gen;
     }
 
-    pub fn generate(self: *Generator) anyerror!struct { llvm_module: types.LLVMModuleRef, ptx: []const u8 } {
+    pub fn generate(self: *Generator) anyerror!types.LLVMModuleRef {
         const main_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), null, 0, 0);
         const main_func: types.LLVMValueRef = core.LLVMAddFunction(self.llvm_module, "main", main_type);
 
@@ -156,47 +151,26 @@ pub const Generator = struct {
 
         const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
 
-        const kernel = try self.kernel.toOwnedSlice();
-        const kernel_len = kernel.len;
-        const kernel_constant = core.LLVMConstString(@ptrCast(kernel), @intCast(kernel_len), 0);
-
-        core.LLVMSetInitializer(self.global_ptx_str.?, kernel_constant);
-
         _ = core.LLVMBuildRet(self.builder, zero);
         core.LLVMDisposeBuilder(self.builder);
 
-        return .{ .llvm_module = self.llvm_module, .ptx = try self.kernel.toOwnedSlice() };
+        return self.llvm_module;
     }
 
     fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!void {
+        _ = self;
         switch (statement) {
             .expr => |expr| {
-                _ = try self.generateExpression(expr);
+                _ = expr;
+                unreachable;
             },
             .assign => |assign| {
-                const value = try self.generateExpression(assign.value);
-
-                try self.named_values.put(assign.target, value);
+                _ = assign;
+                unreachable;
             },
             .function_definition => |function_definition| {
-                const func_type: types.LLVMTypeRef = core.LLVMFunctionType(core.LLVMInt32Type(), null, 0, 0);
-                const c_name = try self.allocator.dupeZ(u8, function_definition.identifier);
-                defer self.allocator.free(c_name);
-                const func: types.LLVMValueRef = core.LLVMAddFunction(self.llvm_module, c_name, func_type);
-
-                const current_block = core.LLVMGetInsertBlock(self.builder);
-
-                const entry: types.LLVMBasicBlockRef = core.LLVMAppendBasicBlock(func, "entry");
-                core.LLVMPositionBuilderAtEnd(self.builder, entry);
-
-                for (function_definition.body.items) |stmt| {
-                    try self.generateStatement(stmt);
-                }
-
-                const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
-                _ = core.LLVMBuildRet(self.builder, zero);
-
-                core.LLVMPositionBuilderAtEnd(self.builder, current_block);
+                _ = function_definition;
+                unreachable;
             },
             .compound => |compound| {
                 _ = compound;
@@ -218,45 +192,37 @@ pub const Generator = struct {
                 return try self.generateConstant(constant);
             },
             .call => |call| {
-                if (call.builtin == true) {
-                    try self.generateBuiltInFunction(call);
-                    const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
-                    return GenericRef{
-                        .Integer = .{
-                            .value_ref = zero,
-                        },
-                    };
-                } else {
-                    // TODO: implement host function calls
-                    unreachable;
-                    // const c_name = try self.allocator.dupeZ(u8, call.identifier);
-                    // defer self.allocator.free(c_name);
+                _ = call;
+                // TODO: implement host function calls
+                unreachable;
+                // const c_name = try self.allocator.dupeZ(u8, call.identifier);
+                // defer self.allocator.free(c_name);
 
-                    // const func = core.LLVMGetNamedFunction(self.llvm_module, c_name);
+                // const func = core.LLVMGetNamedFunction(self.llvm_module, c_name);
 
-                    // const return_type = core.LLVMInt32Type();
+                // const return_type = core.LLVMInt32Type();
 
-                    // const return_value_ref: types.LLVMValueRef = undefined;
-                    // if (call.args.len == 0) {
-                    //     const fn_type = core.LLVMFunctionType(return_type, null, 0, 0);
+                // const return_value_ref: types.LLVMValueRef = undefined;
+                // if (call.args.len == 0) {
+                //     const fn_type = core.LLVMFunctionType(return_type, null, 0, 0);
 
-                    //     return_value_ref = core.LLVMBuildCall2(self.builder, fn_type, func, null, 0, "");
-                    // } else {
-                    //     var arg_values = try self.allocator.alloc(types.LLVMValueRef, call.args.len);
-                    //     defer self.allocator.free(arg_values);
+                //     return_value_ref = core.LLVMBuildCall2(self.builder, fn_type, func, null, 0, "");
+                // } else {
+                //     var arg_values = try self.allocator.alloc(types.LLVMValueRef, call.args.len);
+                //     defer self.allocator.free(arg_values);
 
-                    //     for (call.args, 0..) |arg_expr, i| {
-                    //         const arg_expr_res = try self.generateExpression(arg_expr.*);
-                    //         arg_values[i] = arg_expr_res.value_ref;
-                    //     }
+                //     for (call.args, 0..) |arg_expr, i| {
+                //         const arg_expr_res = try self.generateExpression(arg_expr.*);
+                //         arg_values[i] = arg_expr_res.value_ref;
+                //     }
 
-                    //     const fn_type = core.LLVMFunctionType(return_type, null, 0, 0);
+                //     const fn_type = core.LLVMFunctionType(return_type, null, 0, 0);
 
-                    //     return_value_ref = core.LLVMBuildCall2(self.builder, fn_type, func, &arg_values[0], @intCast(arg_values.len), "");
-                    // }
+                //     return_value_ref = core.LLVMBuildCall2(self.builder, fn_type, func, &arg_values[0], @intCast(arg_values.len), "");
+                // }
 
-                    // return switch(call.)
-                }
+                // return switch(call.)
+
             },
             .variable => |variable| {
                 const value = self.named_values.get(variable.identifier) orelse {
@@ -291,8 +257,7 @@ pub const Generator = struct {
                 const str_global = core.LLVMAddGlobal(self.llvm_module, str_type, str_name.ptr);
                 core.LLVMSetGlobalConstant(str_global, 1);
                 core.LLVMSetLinkage(str_global, .LLVMInternalLinkage);
-                core.LLVMSetInitializer(str_global, core.LLVMConstStringInContext(self.llvm_context, @ptrCast(null_terminated), @intCast(null_terminated.len), 0 // Don't null-terminate again; already done
-                ));
+                core.LLVMSetInitializer(str_global, core.LLVMConstStringInContext(self.llvm_context, @ptrCast(null_terminated), @intCast(null_terminated.len), 0));
 
                 return .{ .String = .{
                     .value_ref = str_global,

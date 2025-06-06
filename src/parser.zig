@@ -53,23 +53,24 @@ pub const Parser = struct {
                 const expr = try self.parseExpression(0);
                 return .{ .expr = expr.* };
             },
-            .IDENTIFIER, .DEVICE_IDENTIFIER => {
+            .IDENTIFIER => {
                 if (self.peek(1).?.type == .LEFT_PAREN) {
                     const expr = try self.parseExpression(0);
                     return .{ .expr = expr.* };
                 }
                 const target = self.curr().literal.?.string;
-                const device_type = if (self.curr().type == .IDENTIFIER) ast.DeviceType.Host else ast.DeviceType.Device;
                 self.cursor += 1;
                 try self.expect(.EQUAL);
                 self.cursor += 1;
                 const expr = try self.parseExpression(0);
-                return ast.Statement{ .assign = ast.Assign{ .target = target, .value = expr.*, .type = device_type } };
+                return ast.Statement{ .assign = ast.Assign{
+                    .target = target,
+                    .value = expr.*,
+                } };
             },
             .FN => {
                 self.cursor += 1;
-                if (self.curr().type != .IDENTIFIER and self.curr().type != .DEVICE_IDENTIFIER) @panic("fn must preceed an identifier");
-                const device_type = if (self.curr().type == .IDENTIFIER) ast.DeviceType.Host else ast.DeviceType.Device;
+                if (self.curr().type != .IDENTIFIER) @panic("fn must preceed an identifier");
                 const identifier = self.curr().literal.?.string;
                 self.cursor += 2;
                 const args = try self.parseFunctionArgs();
@@ -80,7 +81,6 @@ pub const Parser = struct {
                     .function_definition = .{
                         .identifier = identifier,
                         .args = args,
-                        .type = device_type,
                         .body = body,
                     },
                 };
@@ -147,22 +147,18 @@ pub const Parser = struct {
 
                 expr = inner_expr;
             },
-            .IDENTIFIER, .DEVICE_IDENTIFIER => {
+            .IDENTIFIER => {
                 if (self.peek(1) != null and self.peek(1).?.type == .LEFT_PAREN) {
-                    const builtin = builtin_fns.get(self.curr().literal.?.string) != null;
                     self.cursor += 2;
                     expr.* = .{
                         .call = ast.Call{
-                            .type = if (self.peek(-2).?.type == .DEVICE_IDENTIFIER) .Device else .Host,
                             .identifier = self.peek(-2).?.literal.?.string,
                             .args = try self.parseFunctionArgs(),
-                            .builtin = builtin,
                         },
                     };
                 } else {
                     expr.* = .{
                         .variable = .{
-                            .type = if (self.curr().type == .DEVICE_IDENTIFIER) .Device else .Host,
                             .identifier = self.curr().literal.?.string,
                         },
                     };

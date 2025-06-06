@@ -1,5 +1,5 @@
 const std = @import("std");
-const llvm = @import("llvm");
+const llvm = @import("rllvm").llvm;
 const target = llvm.target;
 const types = llvm.types;
 const core = llvm.core;
@@ -28,22 +28,19 @@ pub fn main() anyerror!void {
     const args = try process.argsAlloc(arena);
     const cmd = args[1];
     const cmd_args = args[2..];
-    _ = cmd;
-    _ = cmd_args;
 
-    // if (mem.eql(u8, cmd, "run")) {
-    //     build(arena, cmd_args) catch {
-    //         diagnostics.printAll();
-    //         std.process.exit(0);
-    //     };
-    // }
+    if (mem.eql(u8, cmd, "run")) {
+        build(arena, cmd_args) catch {
+            diagnostics.printAll();
+            std.process.exit(0);
+        };
+    }
 }
 
 fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     var llvm_emit = false;
     var print_tokens = false;
     var print_ast = false;
-    var print_kernel = false;
     var nvidiasm = false;
     var entry_file: ?[]const u8 = null;
 
@@ -56,8 +53,6 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
             print_tokens = true;
         } else if (mem.eql(u8, arg, "--print-ast")) {
             print_ast = true;
-        } else if (mem.eql(u8, arg, "--print-kernel")) {
-            print_kernel = true;
         } else if (mem.eql(u8, arg, "--nvidiasm")) {
             nvidiasm = true;
         } else if (entry_file == null and !mem.startsWith(u8, arg, "-")) {
@@ -102,85 +97,16 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
 
     var generator = Generator.init(module_definition, allocator);
     const output = try generator.generate();
-    const module = output.llvm_module;
 
     if (llvm_emit == true) {
         std.debug.print("\n========= LLVM =========\n", .{});
-        core.LLVMDumpModule(module);
+        core.LLVMDumpModule(output);
         std.debug.print("==========================\n", .{});
     }
 
-    if (print_kernel == true) {
-        std.debug.print("\n========== PTX ==========\n", .{});
-        std.debug.print("{s}\n", .{output.ptx});
-        std.debug.print("===========================\n", .{});
-    }
+    try emit(output.?);
 
-    if (nvidiasm == true) {
-        const tmp_ptx_path = "temp_kernel.ptx";
-        const tmp_cubin_path = "temp_kernel.cubin";
-
-        {
-            var ptx_file = try std.fs.cwd().createFile(tmp_ptx_path, .{});
-            defer ptx_file.close();
-            try ptx_file.writeAll(output.ptx);
-        }
-
-        const ptxas_args = [_][]const u8{
-            "ptxas",
-            "-arch=sm_75",
-            tmp_ptx_path,
-            "-o",
-            tmp_cubin_path,
-        };
-
-        const ptxas_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &ptxas_args,
-            .max_output_bytes = 10 * 1024,
-        });
-        defer allocator.free(ptxas_result.stdout);
-        defer allocator.free(ptxas_result.stderr);
-
-        if (ptxas_result.term.Exited != 0) {
-            std.debug.print("ptxas error: {s}\n", .{ptxas_result.stderr});
-            return error.PtxasError;
-        }
-
-        const nvdisasm_args = [_][]const u8{
-            "nvdisasm",
-            "-c",
-            tmp_cubin_path,
-        };
-
-        const nvdisasm_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &nvdisasm_args,
-            .max_output_bytes = 100 * 1024,
-        });
-        defer allocator.free(nvdisasm_result.stdout);
-        defer allocator.free(nvdisasm_result.stderr);
-
-        if (nvdisasm_result.term.Exited != 0) {
-            std.debug.print("nvdisasm error: {s}\n", .{nvdisasm_result.stderr});
-            return error.NvdisasmError;
-        }
-
-        std.debug.print("\n========= SASS (nvdisasm) =========\n", .{});
-        std.debug.print("{s}\n", .{nvdisasm_result.stdout});
-        std.debug.print("===================================\n", .{});
-
-        std.fs.cwd().deleteFile(tmp_ptx_path) catch |err| {
-            std.debug.print("Failed to delete temporary PTX file: {}\n", .{err});
-        };
-        std.fs.cwd().deleteFile(tmp_cubin_path) catch |err| {
-            std.debug.print("Failed to delete temporary CUBIN file: {}\n", .{err});
-        };
-    }
-
-    try emit(module.?);
-
-    core.LLVMDisposeModule(module);
+    core.LLVMDisposeModule(output);
     core.LLVMShutdown();
 }
 

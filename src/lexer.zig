@@ -148,11 +148,11 @@ pub const Lexer = struct {
         }
     }
 
-    fn identifier(self: *Lexer, device: bool) ?Token {
+    fn identifier(self: *Lexer) ?Token {
         while (self.isAlphaNumeric(self.peek())) _ = self.advance();
 
         const value = self.source[self.start..self.currentIndex];
-        const ttype = keywords.get(value) orelse if (device == false) TokenType.IDENTIFIER else TokenType.DEVICE_IDENTIFIER;
+        const ttype = TokenType.IDENTIFIER;
 
         const token = Token.init(ttype, .{ .string = value }, self.currentLine, self.currentColumn);
         return token;
@@ -200,13 +200,6 @@ pub const Lexer = struct {
                 self.currentLine += 1;
                 return null;
             },
-            '$' => {
-                const d_char = self.advance();
-                if (d_char == '$') @panic("Device identifier cannot start with a $");
-                if (self.isAlpha(d_char)) return self.identifier(true);
-
-                @panic("$ must preceed an identifier");
-            },
             ' ' => return null,
             '\r' => return null,
             '\t' => return null,
@@ -217,7 +210,8 @@ pub const Lexer = struct {
             else => {
                 if (self.isDigit(char)) return self.number();
 
-                if (self.isAlpha(char)) return self.identifier(false);
+                std.debug.print("{}\n", .{self.isAlpha(char)});
+                if (self.isAlpha(char)) return self.identifier();
 
                 const msg = std.fmt.allocPrint(self.allocator, "unexpected character at line {}", .{self.currentLine}) catch @panic("try again");
                 defer self.allocator.free(msg);

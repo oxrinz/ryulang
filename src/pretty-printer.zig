@@ -46,7 +46,7 @@ pub fn prettyPrintStatement(allocator: Allocator, writer: anytype, statement: as
 
 pub fn prettyPrintFunctionDefinition(allocator: Allocator, writer: anytype, func: ast.FunctionDefinition, indent: usize) !void {
     try writer.writeByteNTimes(' ', indent);
-    try writer.print("FunctionDefinition.identifier: {s} (Type: {s})\n", .{ func.identifier, @tagName(func.type) });
+    try writer.print("FunctionDefinition.identifier: {s}\n", .{func.identifier});
 
     try writer.writeByteNTimes(' ', indent);
     try writer.print("FunctionDefinition.returns: {any}\n", .{func.returns});
@@ -92,7 +92,7 @@ pub fn prettyPrintExpression(allocator: Allocator, writer: anytype, expression: 
             try prettyPrintBinary(allocator, writer, binary, indent + 2);
         },
         .variable => |variable| {
-            try writer.print("Expression.variable: {s} (Type: {s})\n", .{ variable.identifier, @tagName(variable.type) });
+            try writer.print("Expression.variable: {s}\n", .{variable.identifier});
         },
         .call => |call| {
             try writer.writeAll("Expression.call:\n");
@@ -139,10 +139,7 @@ pub fn prettyPrintBinary(allocator: Allocator, writer: anytype, binary: ast.Bina
 
 pub fn prettyPrintCall(allocator: Allocator, writer: anytype, call: ast.Call, indent: usize) !void {
     try writer.writeByteNTimes(' ', indent);
-    try writer.print("Call.identifier: {s} (Type: {s})\n", .{ call.identifier, @tagName(call.type) });
-
-    try writer.writeByteNTimes(' ', indent);
-    try writer.print("Call.builtin: {}\n", .{call.builtin});
+    try writer.print("Call.identifier: {s}\n", .{call.identifier});
 
     try writer.writeByteNTimes(' ', indent);
     try writer.writeAll("Call.args:\n");

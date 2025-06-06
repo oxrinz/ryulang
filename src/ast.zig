@@ -61,17 +61,11 @@ pub const Call = struct {
     args: []*Expression,
 };
 
-pub const RuntimeCall = struct {
-    function: fn (args: []Value) Expression,
-    args: []*Expression,
-};
-
 pub const Expression = union(enum) {
     constant: Value,
     binary: Binary,
     variable: Variable,
     call: Call,
-    runtime_call: RuntimeCall,
 };
 
 pub const Assign = struct {

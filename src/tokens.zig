@@ -44,7 +44,6 @@ pub const TokenType = enum {
     LESS_EQUAL,
 
     IDENTIFIER,
-    DEVICE_IDENTIFIER,
     STRING,
     NUMBER,
 
