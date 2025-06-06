@@ -6,12 +6,6 @@
 </picture>
 
 Reimagining what machine learning development workflow should look like
-
-<h3>
-
-[Website](https://ryulang.com/)
-
-</h3>
 </div>
 
 ---
