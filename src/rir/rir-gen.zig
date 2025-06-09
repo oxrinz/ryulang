@@ -58,23 +58,30 @@ pub const Generator = struct {
 
     // TODO: would be nice to split functions that have known return value and unknown into separate scripts
     fn generateExpression(self: *Generator, expr: ast.Expression) !*rir.RIROP {
+        const result = try self.allocator.create(rir.RIROP);
         switch (expr) {
             .binary => |binary| {
-                _ = binary;
-                unreachable;
+                switch (binary.operator) {
+                    .Add => {
+                        const a = try self.generateExpression(binary.left.*);
+                        const b = try self.generateExpression(binary.right.*);
+                        result.* = .{ .add = .{
+                            .a = a,
+                            .b = b,
+                        } };
+                    },
+                    else => unreachable,
+                }
             },
             .constant => |constant| {
-                _ = constant;
-                unreachable;
+                result.* = .{ .constant = .{ .int = constant.Integer } };
             },
             .call => |call| {
                 if (std.mem.eql(u8, call.identifier, "rand") == true) {
                     const shape = try self.generateExpression(call.args[0].*);
-                    const result = try self.allocator.create(rir.RIROP);
                     result.* = .{ .random = .{
                         .shape = shape,
                     } };
-                    return result;
                 } else unreachable;
             },
             .variable => |variable| {
@@ -82,5 +89,6 @@ pub const Generator = struct {
                 unreachable;
             },
         }
+        return result;
     }
 };
