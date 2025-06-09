@@ -1,1 +1,5 @@
 @import 'tailwindcss';
+
+.svelte-flow {
+    background: #000000 !important;
+}

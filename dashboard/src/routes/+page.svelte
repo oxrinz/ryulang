@@ -1,46 +1,68 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
-    let messages: string[] = [];
+    import { SvelteFlow } from "@xyflow/svelte";
+    import "@xyflow/svelte/dist/style.css";
+    import Node from "$components/node.svelte";
+    import type { Data } from "$lib";
+    import { onMount } from "svelte";
+
+    let nodes = $state.raw<any>([]);
+
+    let edges = $state.raw<any>([]);
 
     onMount(() => {
-        const source = new EventSource('/');
+        const source = new EventSource("/");
 
         source.onmessage = (event) => {
             try {
-                const data = JSON.parse(event.data);
-                if (data.message) {
-                    messages = [...messages, data.message];
-                }
+                console.log(event.data);
+                const data: Data = JSON.parse(event.data);
+                const newNodes = data.nodes.map((node, index) => ({
+                    id: node.id,
+                    type: "custom",
+                    position: { x: 0, y: index * 100 },
+                    data: { label: node.title },
+                }));
+                const newEdges = data.edges.map((edge, index) => ({
+                    id: `e${edge.source}-${edge.target}`,
+                    source: edge.source.toString(),
+                    target: edge.target.toString(),
+                }));
+
+                nodes = newNodes;
+                edges = newEdges;
+
+                console.log(data);
             } catch (error) {
-                console.error('Error parsing SSE data:', error);
+                console.error("Error parsing SSE data:", error);
             }
         };
 
         source.onerror = () => {
-            console.error('SSE error, attempting to reconnect...');
+            console.error("SSE error, attempting to reconnect...");
         };
 
         return () => {
             source.close();
         };
     });
+
+    const nodeTypes = {
+        custom: Node,
+    };
 </script>
 
-<ul>
-    {#each messages as msg}
-        <li>{msg}</li>
-    {/each}
-</ul>
+<div style:width="100vw" style:height="100vh">
+    <SvelteFlow
+        proOptions={{ hideAttribution: true }}
+        bind:nodes
+        bind:edges
+        {nodeTypes}
+    />
+</div>
 
 <style>
-    ul {
-        list-style-type: none;
-        padding: 0;
-    }
-    li {
-        margin: 5px 0;
-        padding: 10px;
-        background-color: #f0f0f0;
-        border-radius: 5px;
+    :global(.svelte-flow) {
+        background: #0080ff;
+        border: 1px solid #000000;
     }
 </style>

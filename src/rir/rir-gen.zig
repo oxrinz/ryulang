@@ -28,23 +28,21 @@ pub const Generator = struct {
         return gen;
     }
 
-    pub fn generate(self: *Generator) anyerror!void {
+    pub fn generate(self: *Generator) anyerror!rir.RIROP {
         for (self.module.block.items) |stmt| {
-            try self.generateStatement(stmt);
+            const res = try self.generateStatement(stmt);
+            return res.*;
         }
-
-        return;
+        unreachable;
     }
 
-    fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!void {
+    fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!*rir.RIROP {
         switch (statement) {
             .expr => |expr| {
-                _ = expr;
-                unreachable;
+                return try self.generateExpression(expr);
             },
             .assign => |assign| {
-                const res = try self.generateExpression(assign.value);
-                _ = res;
+                _ = assign;
                 unreachable;
             },
             .function_definition => |function_definition| {
@@ -53,6 +51,7 @@ pub const Generator = struct {
             },
             .compound => |compound| {
                 _ = compound;
+                unreachable;
             },
         }
     }
