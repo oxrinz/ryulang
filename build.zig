@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const rhlo_module = b.createModule(.{
-        .root_source_file = b.path("src/rhlo/root.zig"),
+        .root_source_file = b.path("src/codegen/rhlo/root.zig"),
         .target = target,
         .optimize = optimize,
     });

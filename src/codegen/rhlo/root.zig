@@ -8,9 +8,7 @@ const types = rllvm.llvm.types;
 const core = rllvm.llvm.core;
 const execution = rllvm.llvm.engine;
 
-const pretty_printer = @import("pretty-printer.zig");
 const nodes = @import("nodes.zig");
-const Builder = @import("builder.zig").Builder;
 
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
@@ -140,8 +138,4 @@ pub fn execute(program: nodes.RHLOProgram, params: []*void) !void {
     const main_fn: *const MainFn = @ptrFromInt(main_addr);
 
     _ = main_fn();
-}
-
-test "all" {
-    _ = @import("tests.zig");
 }

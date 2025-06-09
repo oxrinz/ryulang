@@ -8,9 +8,9 @@ const mem = std.mem;
 const Allocator = std.mem.Allocator;
 
 const diagnostics = @import("diagnostics.zig");
-const Lexer = @import("lexer.zig").Lexer;
-const Parser = @import("parser.zig").Parser;
-const Generator = @import("rir-gen.zig").Generator;
+const Lexer = @import("frontend/lexer.zig").Lexer;
+const Parser = @import("frontend/parser.zig").Parser;
+const Generator = @import("rir/rir-gen.zig").Generator;
 
 const prettyprinter = @import("pretty-printer.zig");
 
@@ -35,6 +35,45 @@ pub fn main() anyerror!void {
             std.process.exit(0);
         };
     }
+
+    if (mem.eql(u8, cmd, "dashboard")) {
+        dashboard(arena) catch |err| {
+            std.debug.print("error: {}", .{err});
+            std.process.exit(0);
+        };
+    }
+}
+
+fn dashboard(allocator: Allocator) anyerror!void {
+    var client = std.http.Client{ .allocator = allocator };
+    defer client.deinit();
+
+    var buf: [4096]u8 = undefined;
+
+    const uri = try std.Uri.parse("http://localhost:5173/");
+    var req = try client.open(.POST, uri, .{ .server_header_buffer = &buf });
+    defer req.deinit();
+
+    const Payload = struct {
+        message: []const u8,
+    };
+
+    const payload_data = Payload{ .message = "use ryu!" };
+
+    var json_buffer = std.ArrayList(u8).init(allocator);
+    defer json_buffer.deinit();
+    try std.json.stringify(payload_data, .{}, json_buffer.writer());
+
+    const payload = json_buffer.items;
+    req.transfer_encoding = .{ .content_length = payload.len };
+    req.headers.content_type = .{ .override = "application/json" };
+
+    try req.send();
+    try req.writeAll(payload);
+    try req.finish();
+    try req.wait();
+
+    std.debug.print("status={d}\n", .{req.response.status});
 }
 
 fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
@@ -96,17 +135,17 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     }
 
     var generator = Generator.init(module_definition, allocator);
-    const output = try generator.generate();
+    try generator.generate();
 
-    if (llvm_emit == true) {
-        std.debug.print("\n========= LLVM =========\n", .{});
-        core.LLVMDumpModule(output);
-        std.debug.print("==========================\n", .{});
-    }
+    // if (llvm_emit == true) {
+    //     std.debug.print("\n========= LLVM =========\n", .{});
+    //     // core.LLVMDumpModule(output);
+    //     std.debug.print("==========================\n", .{});
+    // }
 
-    try emit(output.?);
+    // try emit(output.?);
 
-    core.LLVMDisposeModule(output);
+    // core.LLVMDisposeModule(output);
     core.LLVMShutdown();
 }
 

@@ -3,7 +3,7 @@ const tokens_script = @import("tokens.zig");
 const Token = tokens_script.Token;
 const TokenType = tokens_script.TokenType;
 const ast = @import("ast.zig");
-const diagnostics = @import("diagnostics.zig");
+const diagnostics = @import("../diagnostics.zig");
 
 const BuiltinFnType = enum {
     PRINT,

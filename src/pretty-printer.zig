@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ast = @import("ast.zig");
+const ast = @import("frontend/ast.zig");
 
 pub fn prettyPrintModule(allocator: Allocator, writer: anytype, module: *const ast.Module, indent: usize) !void {
     try writer.writeAll("Module {\n");
