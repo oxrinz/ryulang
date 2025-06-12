@@ -1,4 +1,5 @@
 const std = @import("std");
+const rir = @import("../rir/rir.zig");
 
 pub const BinaryOperator = enum {
     Add,
@@ -32,20 +33,6 @@ pub const BinaryOperator = enum {
     }
 };
 
-pub const ValueType = enum {
-    Integer,
-    Float,
-    String,
-    Array,
-};
-
-pub const Value = union(ValueType) {
-    Integer: i32,
-    Float: f32,
-    String: []const u8,
-    Array: []Value,
-};
-
 pub const Binary = struct {
     operator: BinaryOperator,
     left: *Expression,
@@ -61,11 +48,17 @@ pub const Call = struct {
     args: []*Expression,
 };
 
+pub const BuiltinCall = struct {
+    identifier: []const u8,
+    args: []*Expression,
+};
+
 pub const Expression = union(enum) {
-    constant: Value,
+    constant: rir.Constant,
     binary: Binary,
     variable: Variable,
     call: Call,
+    builtin_call: BuiltinCall,
 };
 
 pub const Assign = struct {

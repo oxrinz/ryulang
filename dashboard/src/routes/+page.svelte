@@ -31,7 +31,7 @@
                 layoutOptions: {
                     "elk.algorithm": "mrtree",
                     "elk.direction": "LEFT",
-                    "elk.spacing.nodeNode": "50",
+                    "elk.spacing.nodeNode": "120",
                 },
             });
 

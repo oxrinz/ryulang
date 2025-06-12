@@ -12,6 +12,7 @@ const Lexer = @import("frontend/lexer.zig").Lexer;
 const Parser = @import("frontend/parser.zig").Parser;
 const Generator = @import("rir/rir-gen.zig").Generator;
 const rir = @import("rir/rir.zig");
+const dashboard = @import("dashboard.zig");
 
 const prettyprinter = @import("pretty-printer.zig");
 
@@ -44,137 +45,6 @@ pub fn main() anyerror!void {
             std.process.exit(0);
         };
     }
-}
-
-fn sendToDashboard(allocator: Allocator, op_json: []const u8) anyerror!void {
-    var client = std.http.Client{ .allocator = allocator };
-    defer client.deinit();
-
-    var buf: [4096]u8 = undefined;
-
-    const uri = try std.Uri.parse("http://localhost:5173/");
-    var req = try client.open(.POST, uri, .{ .server_header_buffer = &buf });
-    defer req.deinit();
-
-    const payload = op_json;
-    req.transfer_encoding = .{ .content_length = payload.len };
-    req.headers.content_type = .{ .override = "application/json" };
-
-    try req.send();
-    try req.writeAll(payload);
-    try req.finish();
-    try req.wait();
-}
-
-const Node = struct { title: []const u8 };
-const Edge = struct { source: usize, target: usize };
-
-fn traverse(
-    op: rir.RIROP,
-    nodes: *std.AutoHashMap(usize, Node),
-    edges: *std.ArrayList(Edge),
-    id_counter: *usize,
-    alloc: Allocator,
-) anyerror!usize {
-    const current_id = id_counter.*;
-    id_counter.* += 1;
-
-    const title: []const u8 = switch (op) {
-        .add => try std.fmt.allocPrint(alloc, "Add", .{}),
-        .divide => try std.fmt.allocPrint(alloc, "Divide", .{}),
-        .sqrt => try std.fmt.allocPrint(alloc, "Sqrt", .{}),
-        .call => |call_op| try std.fmt.allocPrint(alloc, "Call: {s}", .{call_op.identifier}),
-        .random => try std.fmt.allocPrint(alloc, "Random", .{}),
-        .constant => |const_op| switch (const_op) {
-            .int => |val| try std.fmt.allocPrint(alloc, "Const: {}", .{val}),
-            .float => |val| try std.fmt.allocPrint(alloc, "Const: {}", .{val}),
-            .string => |val| try std.fmt.allocPrint(alloc, "Const: {s}", .{val}),
-            .array_int => try std.fmt.allocPrint(alloc, "Const: [int array]", .{}),
-            .array_float => try std.fmt.allocPrint(alloc, "Const: [float array]", .{}),
-        },
-        .ret => try std.fmt.allocPrint(alloc, "Return", .{}),
-    };
-
-    try nodes.put(current_id, .{ .title = title });
-
-    switch (op) {
-        .add => |add_op| {
-            const a_id = try traverse(add_op.a.*, nodes, edges, id_counter, alloc);
-            const b_id = try traverse(add_op.b.*, nodes, edges, id_counter, alloc);
-            try edges.append(.{ .source = current_id, .target = a_id });
-            try edges.append(.{ .source = current_id, .target = b_id });
-        },
-        .divide => |div_op| {
-            const a_id = try traverse(div_op.a.*, nodes, edges, id_counter, alloc);
-            const b_id = try traverse(div_op.b.*, nodes, edges, id_counter, alloc);
-            try edges.append(.{ .source = current_id, .target = a_id });
-            try edges.append(.{ .source = current_id, .target = b_id });
-        },
-        .sqrt => |sqrt_op| {
-            const a_id = try traverse(sqrt_op.a.*, nodes, edges, id_counter, alloc);
-            try edges.append(.{ .source = current_id, .target = a_id });
-        },
-        .call => |call_op| {
-            for (call_op.args.*) |arg| {
-                const arg_id = try traverse(arg.*, nodes, edges, id_counter, alloc);
-                try edges.append(.{ .source = current_id, .target = arg_id });
-            }
-        },
-        .random => |rand_op| {
-            const shape_id = try traverse(rand_op.shape.*, nodes, edges, id_counter, alloc);
-            try edges.append(.{ .source = current_id, .target = shape_id });
-        },
-        .ret => |ret_op| {
-            const op_id = try traverse(ret_op.op.*, nodes, edges, id_counter, alloc);
-            try edges.append(.{ .source = current_id, .target = op_id });
-        },
-        .constant => {},
-    }
-
-    return current_id;
-}
-
-fn prepareOps(allocator: Allocator, op: rir.RIROP) anyerror![]const u8 {
-    var nodes = std.AutoHashMap(usize, Node).init(allocator);
-    defer nodes.deinit();
-
-    var edges = std.ArrayList(Edge).init(allocator);
-    defer edges.deinit();
-
-    var id_counter: usize = 0;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    _ = try traverse(op, &nodes, &edges, &id_counter, arena_allocator);
-
-    const SerializableNode = struct { id: []const u8, title: []const u8 };
-    var node_array = std.ArrayList(SerializableNode).init(allocator);
-    defer node_array.deinit();
-    var node_iter = nodes.iterator();
-    while (node_iter.next()) |entry| {
-        const id_str = try std.fmt.allocPrint(arena_allocator, "{}", .{entry.key_ptr.*});
-        try node_array.append(.{ .id = id_str, .title = entry.value_ptr.title });
-    }
-
-    const SerializableEdge = struct { source: []const u8, target: []const u8 };
-    var edge_array = std.ArrayList(SerializableEdge).init(allocator);
-    defer edge_array.deinit();
-    for (edges.items) |edge| {
-        const source_str = try std.fmt.allocPrint(arena_allocator, "{}", .{edge.source});
-        const target_str = try std.fmt.allocPrint(arena_allocator, "{}", .{edge.target});
-        try edge_array.append(.{ .source = source_str, .target = target_str });
-    }
-
-    var buffer = std.ArrayList(u8).init(allocator);
-    defer buffer.deinit();
-    try std.json.stringify(.{
-        .nodes = node_array.items,
-        .edges = edge_array.items,
-    }, .{}, buffer.writer());
-
-    return buffer.toOwnedSlice();
 }
 
 fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
@@ -236,10 +106,10 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     }
 
     var generator = Generator.init(module_definition, allocator);
-    const op = try generator.generate();
-    const op_json = try prepareOps(allocator, op);
+    var op = try generator.generate();
+    const op_json = try dashboard.prepareOps(allocator, &op);
 
-    try sendToDashboard(allocator, op_json);
+    try dashboard.sendToDashboard(allocator, op_json);
 
     // if (llvm_emit == true) {
     //     std.debug.print("\n========= LLVM =========\n", .{});
@@ -355,24 +225,4 @@ fn emit(module: *llvm.types.LLVMOpaqueModule) !void {
         },
         else => unreachable,
     }
-}
-
-test "graphviz" {
-    const allocator = std.testing.allocator;
-
-    var const1 = rir.RIROP{ .constant = .{ .int = 1 } };
-    var const2 = rir.RIROP{ .constant = .{ .int = 2 } };
-    const add_op = rir.RIROP{
-        .add = .{
-            .a = &const1,
-            .b = &const2,
-        },
-    };
-
-    const json = try prepareOps(allocator, add_op);
-    defer allocator.free(json);
-
-    std.debug.print("{s}\n", .{json});
-
-    try sendToDashboard(allocator, json);
 }

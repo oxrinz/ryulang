@@ -34,6 +34,8 @@ pub const TokenType = enum {
     STAR,
     PERCENTAGE,
 
+    AT,
+
     BANG,
     BANG_EQUAL,
     EQUAL,

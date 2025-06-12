@@ -79,13 +79,14 @@ pub fn prettyPrintExpression(allocator: Allocator, writer: anytype, expression: 
 
     switch (expression) {
         .constant => |constant| {
+            _ = constant;
             try writer.writeAll("Expression.constant: ");
-            switch (constant) {
-                .Integer => |i| try writer.print("Integer({})\n", .{i}),
-                .Float => |f| try writer.print("Float({})\n", .{f}),
-                .String => |s| try writer.print("String(\"{s}\")\n", .{s}),
-                .Array => |a| try writer.print("Array(\"{any}\")\n", .{a}),
-            }
+            // switch (constant) {
+            //     .Integer => |i| try writer.print("Integer({})\n", .{i}),
+            //     .Float => |f| try writer.print("Float({})\n", .{f}),
+            //     .String => |s| try writer.print("String(\"{s}\")\n", .{s}),
+            //     .Array => |a| try writer.print("Array(\"{any}\")\n", .{a}),
+            // }
         },
         .binary => |binary| {
             try writer.writeAll("Expression.binary:\n");
@@ -97,6 +98,10 @@ pub fn prettyPrintExpression(allocator: Allocator, writer: anytype, expression: 
         .call => |call| {
             try writer.writeAll("Expression.call:\n");
             try prettyPrintCall(allocator, writer, call, indent + 2);
+        },
+        .builtin_call => |builtin_call| {
+            try writer.writeAll("Expression.builtin_call:\n");
+            try prettyPrintBuiltinCall(allocator, writer, builtin_call, indent + 2);
         },
     }
 }
@@ -143,6 +148,20 @@ pub fn prettyPrintCall(allocator: Allocator, writer: anytype, call: ast.Call, in
 
     try writer.writeByteNTimes(' ', indent);
     try writer.writeAll("Call.args:\n");
+
+    for (call.args, 0..) |arg, i| {
+        try writer.writeByteNTimes(' ', indent + 2);
+        try writer.print("Arg[{}]:\n", .{i});
+        try prettyPrintExpression(allocator, writer, arg.*, indent + 4);
+    }
+}
+
+pub fn prettyPrintBuiltinCall(allocator: Allocator, writer: anytype, call: ast.BuiltinCall, indent: usize) !void {
+    try writer.writeByteNTimes(' ', indent);
+    try writer.print("BuiltinCall.identifier: {s}\n", .{call.identifier});
+
+    try writer.writeByteNTimes(' ', indent);
+    try writer.writeAll("BuiltinCall.args:\n");
 
     for (call.args, 0..) |arg, i| {
         try writer.writeByteNTimes(' ', indent + 2);

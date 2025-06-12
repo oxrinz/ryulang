@@ -180,6 +180,7 @@ pub const Lexer = struct {
             '&' => if (self.match('&')) .AMPERSAND_AMPERSAND else .AMPERSAND,
             '|' => if (self.match('|')) .PIPE_PIPE else .PIPE,
             '^' => .CARET,
+            '@' => .AT,
 
             '!' => if (self.match('=')) .BANG_EQUAL else .BANG,
             '=' => if (self.match('=')) .EQUAL_EQUAL else .EQUAL,

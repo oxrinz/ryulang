@@ -35,13 +35,10 @@ export const POST: RequestHandler = async ({ request }) => {
             edges: [...currentData.edges.filter(e => !data.edges.some(ne => ne.source === e.source && ne.target === e.target)), ...data.edges]
         };
 
-        console.log('POST: Updated currentData:', currentData);
-
         for (const stream of activeStreams) {
             try {
                 const message = `data: ${JSON.stringify(currentData)}\n\n`;
                 stream.controller.enqueue(message);
-                console.log('POST: Sent SSE update to stream:', currentData);
             } catch (error) {
                 console.error('POST: Error sending SSE update to stream:', error);
                 stream.close();
@@ -71,18 +68,6 @@ export const GET: RequestHandler = async () => {
 
     const stream = new ReadableStream({
         start(controller) {
-            console.log('GET: SSE stream started');
-
-            try {
-                const initialMessage = `data: ${JSON.stringify(currentData)}\n\n`;
-                controller.enqueue(initialMessage);
-                console.log('GET: Sent initial data:', currentData);
-            } catch (error) {
-                console.error('GET: Error sending initial data:', error);
-                controller.close();
-                return;
-            }
-
             let isStreamOpen = true;
 
             const streamInfo = {
@@ -102,23 +87,8 @@ export const GET: RequestHandler = async () => {
             };
             activeStreams.add(streamInfo);
 
-            const pingInterval = setInterval(() => {
-                if (!isStreamOpen) {
-                    clearInterval(pingInterval);
-                    return;
-                }
-                try {
-                    controller.enqueue(':ping\n\n');
-                    console.log('GET: Sent ping');
-                } catch (error) {
-                    console.error('GET: Error sending ping:', error);
-                    streamInfo.close();
-                }
-            }, 5000); 
-
             return () => {
                 console.log('GET: Cleaning up SSE stream');
-                clearInterval(pingInterval);
                 streamInfo.close();
             };
         },

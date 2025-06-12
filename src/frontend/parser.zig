@@ -4,6 +4,7 @@ const Token = tokens_script.Token;
 const TokenType = tokens_script.TokenType;
 const ast = @import("ast.zig");
 const diagnostics = @import("../diagnostics.zig");
+const rir = @import("../rir/rir.zig");
 
 const BuiltinFnType = enum {
     PRINT,
@@ -49,7 +50,7 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser) anyerror!ast.Statement {
         switch (self.curr().type) {
-            .NUMBER => {
+            .NUMBER, .LEFT_BRACKET => {
                 const expr = try self.parseExpression(0);
                 return .{ .expr = expr.* };
             },
@@ -84,6 +85,10 @@ pub const Parser = struct {
                         .body = body,
                     },
                 };
+            },
+            .AT => {
+                const expr = try self.parseExpression(0);
+                return .{ .expr = expr.* };
             },
             else => unreachable,
         }
@@ -122,17 +127,30 @@ pub const Parser = struct {
         var expr = try self.allocator.create(ast.Expression);
 
         switch (self.curr().type) {
-            .STRING => {
-                expr.* = .{
-                    .constant = .{ .String = self.curr().literal.?.string },
-                };
-                self.cursor += 1;
-            },
+            // .STRING => {
+            //     expr.* = .{
+            //         .constant = .{
+            //             .data = self.curr().literal.?.string,
+            //         },
+            //     };
+            //     self.cursor += 1;
+            // },
             .NUMBER => {
-                const constant: ast.Value = switch (self.curr().literal.?) {
-                    .integer => .{ .Integer = self.curr().literal.?.integer },
-                    .float => .{ .Float = self.curr().literal.?.float },
+                const number: *anyopaque = switch (self.curr().literal.?) {
+                    .integer => @constCast(@ptrCast(&self.curr().literal.?.integer)),
+                    .float => @constCast(@ptrCast(&self.curr().literal.?.float)),
                     else => unreachable,
+                };
+                const dtype: rir.DType = switch (self.curr().literal.?) {
+                    .integer => .I32,
+                    .float => .F32,
+                    else => unreachable,
+                };
+                const shape = [_]usize{1};
+                const constant = rir.Constant{
+                    .ptr = number,
+                    .shape = &shape,
+                    .dtype = dtype,
                 };
                 expr.* = .{
                     .constant = constant,
@@ -165,20 +183,53 @@ pub const Parser = struct {
                     self.cursor += 1;
                 }
             },
+            .AT => {
+                if (self.peek(2) != null and self.peek(2).?.type == .LEFT_PAREN) {
+                    self.cursor += 3;
+                    expr.* = .{
+                        .builtin_call = ast.BuiltinCall{
+                            .identifier = self.peek(-2).?.literal.?.string,
+                            .args = try self.parseFunctionArgs(),
+                        },
+                    };
+                } else unreachable;
+            },
+
+            // TODO: implement recursive arrays
             .LEFT_BRACKET => {
-                var value_array = std.ArrayList(ast.Value).init(self.allocator);
+                var value_array = std.ArrayList(u8).init(self.allocator);
                 self.cursor += 1;
+
                 var result = try self.parseFactor();
-                try value_array.append(result.*.constant);
+                if (result.* != .constant) unreachable;
+                const first_literal = result.*.constant.ptr;
+                const dtype = result.*.constant.dtype;
+
+                try value_array.appendSlice(std.mem.asBytes(&first_literal));
+
+                var count: usize = 1;
                 while (self.curr().type != .RIGHT_BRACKET) {
                     try self.expect(.COMMA);
                     self.cursor += 1;
                     result = try self.parseFactor();
-                    try value_array.append(result.*.constant);
+                    if (result.* != .constant or result.*.constant.dtype != dtype) unreachable;
+                    try value_array.appendSlice(std.mem.asBytes(&result.*.constant.ptr));
+                    count += 1;
                 }
                 self.cursor += 1;
 
-                expr.* = ast.Expression{ .constant = .{ .Array = try value_array.toOwnedSlice() } };
+                const data = try value_array.toOwnedSlice();
+                const shape = try self.allocator.alloc(usize, 1);
+                shape[0] = count;
+                const constant = rir.Constant{
+                    .ptr = @constCast(@ptrCast(data.ptr)),
+                    .dtype = dtype,
+                    .shape = shape,
+                };
+
+                expr.* = .{
+                    .constant = constant,
+                };
 
                 return expr;
             },

@@ -14,6 +14,7 @@ const execution = rllvm.llvm.engine;
 pub const Generator = struct {
     allocator: std.mem.Allocator,
     module: ast.Module,
+    variables: std.StringArrayHashMap(*rir.RIROP),
 
     pub fn init(module: ast.Module, allocator: std.mem.Allocator) Generator {
         _ = target.LLVMInitializeNativeTarget();
@@ -23,17 +24,18 @@ pub const Generator = struct {
         const gen = Generator{
             .allocator = allocator,
             .module = module,
+            .variables = std.StringArrayHashMap(*rir.RIROP).init(allocator),
         };
 
         return gen;
     }
 
     pub fn generate(self: *Generator) anyerror!rir.RIROP {
+        var res: *rir.RIROP = undefined;
         for (self.module.block.items) |stmt| {
-            const res = try self.generateStatement(stmt);
-            return res.*;
+            res = try self.generateStatement(stmt);
         }
-        unreachable;
+        return res.*;
     }
 
     fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!*rir.RIROP {
@@ -42,8 +44,9 @@ pub const Generator = struct {
                 return try self.generateExpression(expr);
             },
             .assign => |assign| {
-                _ = assign;
-                unreachable;
+                const value = try self.generateExpression(assign.value);
+                try self.variables.put(assign.target, value);
+                return value;
             },
             .function_definition => |function_definition| {
                 _ = function_definition;
@@ -56,7 +59,6 @@ pub const Generator = struct {
         }
     }
 
-    // TODO: would be nice to split functions that have known return value and unknown into separate scripts
     fn generateExpression(self: *Generator, expr: ast.Expression) !*rir.RIROP {
         const result = try self.allocator.create(rir.RIROP);
         switch (expr) {
@@ -74,19 +76,25 @@ pub const Generator = struct {
                 }
             },
             .constant => |constant| {
-                result.* = .{ .constant = .{ .int = constant.Integer } };
+                std.debug.print("fuck: {any}\n", .{constant.shape});
+                result.* = .{ .constant = constant };
             },
+
             .call => |call| {
-                if (std.mem.eql(u8, call.identifier, "rand") == true) {
-                    const shape = try self.generateExpression(call.args[0].*);
-                    result.* = .{ .random = .{
+                _ = call;
+                unreachable;
+            },
+            .builtin_call => |builtin_call| {
+                if (std.mem.eql(u8, builtin_call.identifier, "rand") == true) {
+                    const shape = try self.generateExpression(builtin_call.args[0].*);
+                    result.* = .{ .rand = .{
+                        .dtype = .F32,
                         .shape = shape,
                     } };
                 } else unreachable;
             },
             .variable => |variable| {
-                _ = variable;
-                unreachable;
+                return self.variables.get(variable.identifier).?;
             },
         }
         return result;
