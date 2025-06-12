@@ -16,7 +16,7 @@
             id: "root",
             children: nodes.map((node) => ({
                 id: node.id,
-                width: 150,
+                width: 250,
                 height: 50,
             })),
             edges: edges.map((edge) => ({
@@ -29,7 +29,7 @@
         try {
             const layout = await elk.layout(elkGraph, {
                 layoutOptions: {
-                    "elk.algorithm": "mrtree",
+                    "elk.algorithm": "layered",
                     "elk.direction": "LEFT",
                     "elk.spacing.nodeNode": "120",
                 },

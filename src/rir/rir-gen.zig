@@ -30,6 +30,7 @@ pub const Generator = struct {
         return gen;
     }
 
+    // TODO: fix
     pub fn generate(self: *Generator) anyerror!rir.RIROP {
         var res: *rir.RIROP = undefined;
         for (self.module.block.items) |stmt| {
