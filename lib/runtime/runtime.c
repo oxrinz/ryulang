@@ -47,7 +47,6 @@ void print_cuda_error(int error_code, int function)
 }
 const char *int_to_string(int value)
 {
-    print("JÄVLA");
     static char buffer[32];
     snprintf(buffer, sizeof(buffer), "%d", value);
     return buffer;

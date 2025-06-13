@@ -40,7 +40,8 @@ pub fn main() anyerror!void {
     const cmd_args = args[2..];
 
     if (mem.eql(u8, cmd, "run")) {
-        build(arena, cmd_args) catch {
+        build(arena, cmd_args) catch |err| {
+            std.debug.print("{}", .{err});
             diagnostics.printAll();
             std.process.exit(0);
         };
@@ -110,6 +111,8 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     const op_json = try dashboard.prepareOps(allocator, &op);
 
     try dashboard.sendToDashboard(allocator, op_json);
+
+    try @import("codegen/nvidia/execution.zig").execute(op);
 
     // if (llvm_emit == true) {
     //     std.debug.print("\n========= LLVM =========\n", .{});

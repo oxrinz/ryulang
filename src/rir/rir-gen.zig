@@ -30,6 +30,7 @@ pub const Generator = struct {
         return gen;
     }
 
+    // TODO: support multiple outputs
     // TODO: fix
     pub fn generate(self: *Generator) anyerror!rir.RIROP {
         var res: *rir.RIROP = undefined;
@@ -77,7 +78,6 @@ pub const Generator = struct {
                 }
             },
             .constant => |constant| {
-                std.debug.print("fuck: {any}\n", .{constant.shape});
                 result.* = .{ .constant = constant };
             },
 
@@ -89,7 +89,7 @@ pub const Generator = struct {
                 if (std.mem.eql(u8, builtin_call.identifier, "rand") == true) {
                     const shape = try self.generateExpression(builtin_call.args[0].*);
                     result.* = .{ .rand = .{
-                        .dtype = .F32,
+                        .dtype = .F64,
                         .shape = shape,
                     } };
                 } else unreachable;

@@ -136,20 +136,35 @@ pub const Parser = struct {
             //     self.cursor += 1;
             // },
             .NUMBER => {
-                const number: *anyopaque = switch (self.curr().literal.?) {
-                    .integer => @constCast(@ptrCast(&self.curr().literal.?.integer)),
-                    .float => @constCast(@ptrCast(&self.curr().literal.?.float)),
+                const literal = self.curr().literal.?;
+                const dtype: rir.DType = switch (literal) {
+                    .integer => .I64,
+                    .float => .F64,
                     else => unreachable,
                 };
-                const dtype: rir.DType = switch (self.curr().literal.?) {
-                    .integer => .I32,
-                    .float => .F32,
+
+                // Allocate memory for the value
+                const number: *anyopaque = switch (literal) {
+                    .integer => blk: {
+                        const ptr = try self.allocator.create(i32);
+                        ptr.* = literal.integer;
+                        break :blk @ptrCast(ptr);
+                    },
+                    .float => blk: {
+                        const ptr = try self.allocator.create(f32);
+                        ptr.* = literal.float;
+                        break :blk @ptrCast(ptr);
+                    },
                     else => unreachable,
                 };
-                const shape = [_]usize{1};
+
+                // Allocate memory for the shape
+                const shape = try self.allocator.create([1]usize);
+                shape.* = [_]usize{1};
+
                 const constant = rir.Constant{
                     .ptr = number,
-                    .shape = &shape,
+                    .shape = shape,
                     .dtype = dtype,
                 };
                 expr.* = .{
@@ -202,10 +217,9 @@ pub const Parser = struct {
 
                 var result = try self.parseFactor();
                 if (result.* != .constant) unreachable;
-                const first_literal = result.*.constant.ptr;
                 const dtype = result.*.constant.dtype;
 
-                try value_array.appendSlice(std.mem.asBytes(&first_literal));
+                try value_array.appendSlice(result.*.constant.asBytes());
 
                 var count: usize = 1;
                 while (self.curr().type != .RIGHT_BRACKET) {
@@ -213,7 +227,7 @@ pub const Parser = struct {
                     self.cursor += 1;
                     result = try self.parseFactor();
                     if (result.* != .constant or result.*.constant.dtype != dtype) unreachable;
-                    try value_array.appendSlice(std.mem.asBytes(&result.*.constant.ptr));
+                    try value_array.appendSlice(result.*.constant.asBytes());
                     count += 1;
                 }
                 self.cursor += 1;
