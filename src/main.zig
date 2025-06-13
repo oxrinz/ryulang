@@ -107,12 +107,12 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     }
 
     var generator = Generator.init(module_definition, allocator);
-    var op = try generator.generate();
-    const op_json = try dashboard.prepareOps(allocator, &op);
+    const ops = try generator.generate();
+    const op_json = try dashboard.prepareOps(allocator, ops);
 
     try dashboard.sendToDashboard(allocator, op_json);
 
-    try @import("codegen/nvidia/execution.zig").execute(op);
+    try @import("codegen/nvidia/execution.zig").execute(ops);
 
     // if (llvm_emit == true) {
     //     std.debug.print("\n========= LLVM =========\n", .{});

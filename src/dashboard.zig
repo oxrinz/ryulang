@@ -91,7 +91,7 @@ fn traverse(
     return current_id;
 }
 
-pub fn prepareOps(allocator: Allocator, op: *rir.RIROP) anyerror![]const u8 {
+pub fn prepareOps(allocator: Allocator, ops: []*rir.RIROP) anyerror![]const u8 {
     var nodes = std.AutoHashMap(usize, Node).init(allocator);
     defer nodes.deinit();
 
@@ -107,7 +107,9 @@ pub fn prepareOps(allocator: Allocator, op: *rir.RIROP) anyerror![]const u8 {
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    _ = try traverse(op, &nodes, &edges, &id_counter, arena_allocator, &op_map);
+    for (ops) |op| {
+        _ = try traverse(op, &nodes, &edges, &id_counter, arena_allocator, &op_map);
+    }
 
     const SerializableNode = struct { id: []const u8, title: []const u8 };
     var node_array = std.ArrayList(SerializableNode).init(allocator);

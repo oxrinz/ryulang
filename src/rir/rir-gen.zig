@@ -30,14 +30,66 @@ pub const Generator = struct {
         return gen;
     }
 
-    // TODO: support multiple outputs
-    // TODO: fix
-    pub fn generate(self: *Generator) anyerror!rir.RIROP {
-        var res: *rir.RIROP = undefined;
-        for (self.module.block.items) |stmt| {
-            res = try self.generateStatement(stmt);
+    fn collectUsedVariables(self: *Generator, expr: ast.Expression, used: *std.StringHashMap(void)) !void {
+        switch (expr) {
+            .variable => |variable| {
+                try used.put(variable.identifier, {});
+            },
+            .binary => |bin| {
+                try self.collectUsedVariables(bin.left.*, used);
+                try self.collectUsedVariables(bin.right.*, used);
+            },
+            .constant => {},
+            .call => |call| {
+                for (call.args) |arg| {
+                    try self.collectUsedVariables(arg.*, used);
+                }
+            },
+            .builtin_call => |builtin| {
+                for (builtin.args) |arg| {
+                    try self.collectUsedVariables(arg.*, used);
+                }
+            },
         }
-        return res.*;
+    }
+
+    pub fn generate(self: *Generator) anyerror![]*rir.RIROP {
+        var final_ops = std.ArrayList(*rir.RIROP).init(self.allocator);
+        var used = std.StringHashMap(void).init(self.allocator);
+        defer used.deinit();
+
+        for (self.module.block.items) |stmt| {
+            switch (stmt) {
+                .assign => |assign| {
+                    const value = try self.generateExpression(assign.value);
+                    try self.variables.put(assign.target, value);
+                    try self.collectUsedVariables(assign.value, &used);
+                },
+                .expr => |expr| {
+                    const op = try self.generateExpression(expr);
+                    try final_ops.append(op);
+                    try self.collectUsedVariables(expr, &used);
+                },
+                .function_definition => |function_definition| {
+                    _ = function_definition;
+                    unreachable;
+                },
+                .compound => |compound| {
+                    _ = compound;
+                    unreachable;
+                },
+            }
+        }
+
+        // Add operations for assigned variables that are not used
+        var it = self.variables.iterator();
+        while (it.next()) |entry| {
+            if (!used.contains(entry.key_ptr.*)) {
+                try final_ops.append(entry.value_ptr.*);
+            }
+        }
+
+        return try final_ops.toOwnedSlice();
     }
 
     fn generateStatement(self: *Generator, statement: ast.Statement) anyerror!*rir.RIROP {

@@ -11,7 +11,7 @@ const rir = @import("../../rir/rir.zig");
 
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
-pub fn execute(op: rir.RIROP) !void {
+pub fn execute(ops: []*rir.RIROP) !void {
     // init code
     _ = target.LLVMInitializeNativeTarget();
     _ = target.LLVMInitializeNativeAsmPrinter();
@@ -21,7 +21,7 @@ pub fn execute(op: rir.RIROP) !void {
 
     // const module = core.LLVMModuleCreateWithName("main");
 
-    const metadata = try calculateMetadata(op);
+    const metadata = try calculateMetadata(ops);
 
     std.debug.print("metadata: {any}\n", .{metadata});
 
@@ -130,8 +130,8 @@ pub fn execute(op: rir.RIROP) !void {
     // _ = main_fn();
 }
 
-fn calculateMetadata(op: rir.RIROP) !struct { block_dim_x: rllvm.types.IntegerRef, block_dim_y: rllvm.types.IntegerRef, block_dim_z: rllvm.types.IntegerRef } {
-    const shape = op.getShape();
+fn calculateMetadata(ops: []*rir.RIROP) !struct { block_dim_x: rllvm.types.IntegerRef, block_dim_y: rllvm.types.IntegerRef, block_dim_z: rllvm.types.IntegerRef } {
+    const shape = ops[0].*.getShape();
 
     const int_type = core.LLVMInt32Type();
     return .{
