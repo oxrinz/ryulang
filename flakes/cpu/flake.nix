@@ -1,5 +1,5 @@
 {
-  description = "RyuNvidia";
+  description = "RyuCPU";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -22,7 +22,6 @@
             llvm
             pkgconf
             gcc13
-            clang
           ];
           shellHook = ''
             export LD_LIBRARY_PATH=${pkgs.llvm}/lib:${pkgs.llvmPackages.mlir}/lib:$LD_LIBRARY_PATH

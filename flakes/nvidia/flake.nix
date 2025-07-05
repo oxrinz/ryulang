@@ -24,21 +24,18 @@
             gdb
             zig
             llvm
-            llvmPackages.mlir
             pkgconf
             gcc13
-            clang
-            cudaPackages.nsight_compute
           ];
           shellHook = ''
             export CUDA_PATH=${pkgs.cudatoolkit}
-            export LD_LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:${pkgs.llvmPackages.mlir}/lib:$LD_LIBRARY_PATH
-            export LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:${pkgs.llvmPackages.mlir}/lib:$LIBRARY_PATH
-            export C_INCLUDE_PATH=${pkgs.cudatoolkit}/include:${pkgs.llvm}/include:${pkgs.llvmPackages.mlir}/include:$C_INCLUDE_PATH
+            export LD_LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:$LD_LIBRARY_PATH
+            export LIBRARY_PATH=/run/opengl-driver/lib:${pkgs.cudatoolkit}/lib:${pkgs.cudaPackages.cuda_cudart}/lib:${pkgs.llvm}/lib:$LIBRARY_PATH
+            export C_INCLUDE_PATH=${pkgs.cudatoolkit}/include:${pkgs.llvm}/include:$C_INCLUDE_PATH
             export LLVM_PATH=${pkgs.llvm}
             export LLVM_CONFIG=${pkgs.llvm}/bin/llvm-config
             export PATH=${pkgs.gcc13}/bin:$PATH
-            export PKG_CONFIG_PATH=${pkgs.llvmPackages.mlir}/lib/pkgconfig:${pkgs.llvm}/lib/pkgconfig:$PKG_CONFIG_PATH
+            export PKG_CONFIG_PATH=${pkgs.llvm}/lib/pkgconfig:$PKG_CONFIG_PATH
           '';
         };
       });
