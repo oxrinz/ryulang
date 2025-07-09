@@ -26,6 +26,7 @@
             llvm
             pkgconf
             gcc13
+            lldb
           ];
           shellHook = ''
             export CUDA_PATH=${pkgs.cudatoolkit}

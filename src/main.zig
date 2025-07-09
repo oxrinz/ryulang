@@ -1,10 +1,16 @@
 const std = @import("std");
+
 const llvm = @import("rllvm").llvm;
 const target = llvm.target;
+const target_machine = llvm.target_machine;
 const types = llvm.types;
 const core = llvm.core;
 const process = std.process;
 const mem = std.mem;
+const execution = llvm.engine;
+const debug = llvm.debug;
+const analysis = llvm.analysis;
+
 const Allocator = std.mem.Allocator;
 
 const diagnostics = @import("diagnostics.zig");
@@ -39,33 +45,22 @@ pub fn main() anyerror!void {
     const cmd = args[1];
     const cmd_args = args[2..];
 
-    if (mem.eql(u8, cmd, "run")) {
-        build(arena, cmd_args) catch |err| {
-            std.debug.print("{}", .{err});
-            diagnostics.printAll();
-            std.process.exit(0);
-        };
-    }
-}
-
-fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
-    var llvm_emit = false;
     var print_tokens = false;
     var print_ast = false;
-    var nvidiasm = false;
+    var dump_llvm = false;
     var entry_file: ?[]const u8 = null;
 
     var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (mem.eql(u8, arg, "--llvm-emit")) {
-            llvm_emit = true;
-        } else if (mem.eql(u8, arg, "--print-tokens")) {
+    while (i < cmd_args.len) : (i += 1) {
+        const arg = cmd_args[i];
+        if (mem.eql(u8, arg, "--print-tokens")) {
             print_tokens = true;
         } else if (mem.eql(u8, arg, "--print-ast")) {
             print_ast = true;
-        } else if (mem.eql(u8, arg, "--nvidiasm")) {
-            nvidiasm = true;
+        } else if (mem.eql(u8, arg, "--dump-llvm")) {
+            dump_llvm = true;
+        } else if (mem.eql(u8, arg, "--debug")) {
+            // TODO: enable / disable debugging
         } else if (entry_file == null and !mem.startsWith(u8, arg, "-")) {
             entry_file = arg;
         }
@@ -75,7 +70,7 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
     defer file.close();
 
     const file_size = try file.getEndPos();
-    const source = try allocator.alloc(u8, file_size);
+    const source = try arena.alloc(u8, file_size);
     const bytes_read = try file.readAll(source);
 
     if (bytes_read != file_size) {
@@ -83,7 +78,7 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
         std.process.exit(1);
     }
 
-    var lexer = Lexer.init(allocator, source);
+    var lexer = Lexer.init(arena, source);
     lexer.scan();
 
     if (print_tokens == true) {
@@ -98,134 +93,126 @@ fn build(allocator: Allocator, args: [][:0]u8) anyerror!void {
         std.debug.print("========================\n", .{});
     }
 
-    var parser = try Parser.init(lexer.tokens.items, allocator);
+    var parser = try Parser.init(lexer.tokens.items, arena);
     const module_definition = try parser.parse();
     if (print_ast == true) {
         std.debug.print("\n======== Program ========\n", .{});
-        try prettyprinter.printAst(allocator, &module_definition);
+        try prettyprinter.printAst(arena, &module_definition);
         std.debug.print("===========================\n", .{});
     }
 
-    var generator = Generator.init(module_definition, allocator);
+    var generator = Generator.init(module_definition, arena);
     const ops = try generator.generate();
-    const op_json = try dashboard.prepareOps(allocator, ops);
+    const op_json = try dashboard.prepareOps(arena, ops);
 
-    try dashboard.sendToDashboard(allocator, op_json);
+    try dashboard.sendToDashboard(arena, op_json);
 
-    try @import("codegen/nvidia/execution.zig").execute(ops);
+    const module = try @import("codegen/nvidia.zig").compile(ops);
 
-    // if (llvm_emit == true) {
-    //     std.debug.print("\n========= LLVM =========\n", .{});
-    //     // core.LLVMDumpModule(output);
-    //     std.debug.print("==========================\n", .{});
-    // }
+    if (dump_llvm == true) {
+        std.debug.print("\n========= LLVM =========\n", .{});
+        var err: [*c]u8 = null;
+        const filename = "module.ll";
+        if (core.LLVMPrintModuleToFile(module, filename, &err) != 0) {
+            std.debug.print("Error writing module to file: {s}\n", .{err});
+            core.LLVMDisposeMessage(err);
+            return error.DumpError;
+        }
+        std.debug.print("Module dumped to {s}\n", .{filename});
+        std.debug.print("===========================\n", .{});
+    }
 
-    // try emit(output.?);
-
-    // core.LLVMDisposeModule(output);
-    core.LLVMShutdown();
+    if (mem.eql(u8, cmd, "run")) {
+        execute(module) catch |err| {
+            std.debug.print("{}", .{err});
+            diagnostics.printAll();
+            std.process.exit(0);
+        };
+    } else if (mem.eql(u8, cmd, "build")) {
+        build(arena, module) catch |err| {
+            std.debug.print("{}", .{err});
+            diagnostics.printAll();
+            std.process.exit(0);
+        };
+    }
 }
 
-fn emit(module: *llvm.types.LLVMOpaqueModule) !void {
-    var error_msg: [*c]u8 = undefined;
-    var ee: types.LLVMExecutionEngineRef = undefined;
+fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!void {
+    const triple = target_machine.LLVMGetDefaultTargetTriple();
+    defer core.LLVMDisposeMessage(triple);
 
-    if (llvm.engine.LLVMCreateExecutionEngineForModule(&ee, module, &error_msg) != 0) {
-        std.debug.print("Failed to create execution engine: {s}\n", .{std.mem.span(error_msg)});
+    var error_msg: [*c]u8 = null;
+    var target_ref: types.LLVMTargetRef = undefined;
+    if (target_machine.LLVMGetTargetFromTriple(triple, &target_ref, &error_msg) != 0) {
+        std.debug.print("Error getting target: {s}\n", .{error_msg});
         core.LLVMDisposeMessage(error_msg);
-        return error.ExecutionEngineCreationFailed;
+        return error.TargetError;
     }
 
-    var memory_buffer: types.LLVMMemoryBufferRef = undefined;
-    const target_machine = llvm.engine.LLVMGetExecutionEngineTargetMachine(ee);
+    const cpu = "generic";
+    const features = "";
+    const tm = target_machine.LLVMCreateTargetMachine(target_ref, triple, cpu, features, .LLVMCodeGenLevelDefault, .LLVMRelocDefault, .LLVMCodeModelDefault);
+    if (tm == null) {
+        return error.TargetMachineCreationFailed;
+    }
+    defer target_machine.LLVMDisposeTargetMachine(tm);
 
-    if (llvm.target_machine.LLVMTargetMachineEmitToMemoryBuffer(target_machine, module, .LLVMObjectFile, &error_msg, &memory_buffer) != 0) {
-        std.debug.print("Error emitting to memory buffer: {s}\n", .{std.mem.span(error_msg)});
+    if (analysis.LLVMVerifyModule(module, .LLVMReturnStatusAction, &error_msg) != 0) {
+        if (error_msg != null) {
+            std.debug.print("Module verification failed: {s}\n", .{error_msg});
+            core.LLVMDisposeMessage(error_msg);
+        }
+        return error.InvalidModule;
+    }
+
+    const debug_version = debug.LLVMDebugMetadataVersion();
+    const debug_val = core.LLVMValueAsMetadata(core.LLVMConstInt(core.LLVMInt32Type(), debug_version, 0));
+    const key = "Debug Info Version";
+    core.LLVMAddModuleFlag(module, .LLVMModuleFlagBehaviorWarning, key, key.len, debug_val);
+    std.debug.print("ended\n", .{});
+
+    const output_filename = "output.o";
+    if (target_machine.LLVMTargetMachineEmitToFile(tm, module, output_filename, .LLVMObjectFile, &error_msg) != 0) {
+        std.debug.print("Error emitting to file: {s}\n", .{error_msg});
         core.LLVMDisposeMessage(error_msg);
-        return error.MemoryBufferEmitFailed;
+        return error.EmitError;
     }
-    defer core.LLVMDisposeMemoryBuffer(memory_buffer);
+    std.debug.print("ended\n", .{});
 
-    const obj_data = core.LLVMGetBufferStart(memory_buffer);
-    const obj_size = core.LLVMGetBufferSize(memory_buffer);
-
-    const allocator = std.heap.page_allocator;
-    const tmp_file = "temp_obj_file.o";
-
-    {
-        var file = try std.fs.cwd().createFile(tmp_file, .{});
-        defer file.close();
-        try file.writeAll(obj_data[0..obj_size]);
-    }
-
-    defer {
-        std.fs.cwd().deleteFile(tmp_file) catch |err| {
-            std.debug.print("Failed to delete temporary file: {}\n", .{err});
-        };
-    }
-    defer {
-        std.fs.cwd().deleteFile("program") catch |err| {
-            std.debug.print("Failed to delete executable: {}\n", .{err});
-        };
-    }
-
-    const compile_args = [_][]const u8{
+    var child = std.process.Child.init(&[_][]const u8{
         "cc",
-        "-v",
-        "-fno-stack-check",
+        "output.o",
         "-o",
         "program",
-        tmp_file,
-        "lib/runtime/libruntime.a",
+        "-g",
         "/run/opengl-driver/lib/libcuda.so",
         "-lcuda",
-    };
-
-    const compile_result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &compile_args,
-        .max_output_bytes = 100 * 1024,
-    }) catch |err| {
-        std.debug.print("Failed to run compiler: {}\n", .{err});
-        return err;
-    };
-    defer {
-        allocator.free(compile_result.stdout);
-        allocator.free(compile_result.stderr);
+    }, allocator);
+    child.stdout = std.io.getStdOut();
+    child.stderr = std.io.getStdErr();
+    const term = try child.spawnAndWait();
+    if (term.Exited != 0) {
+        return error.LinkError;
     }
 
-    const run_args = [_][]const u8{
-        "./" ++ "program",
-    };
+    try std.fs.cwd().deleteFile(output_filename);
+}
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &run_args,
-        .max_output_bytes = 10 * 1024,
-    });
-    defer {
-        allocator.free(run_result.stdout);
-        allocator.free(run_result.stderr);
+fn execute(module: types.LLVMModuleRef) !void {
+    var error_msg: [*c]u8 = null;
+    var engine: types.LLVMExecutionEngineRef = undefined;
+    if (execution.LLVMCreateExecutionEngineForModule(&engine, module, &error_msg) != 0) {
+        std.debug.print("Execution engine creation failed: {s}\n", .{error_msg});
+        core.LLVMDisposeMessage(error_msg);
+        @panic("failed to create exec engine");
     }
+    defer execution.LLVMDisposeExecutionEngine(engine);
 
-    if (run_result.stdout.len > 0) {
-        std.debug.print("{s}\n", .{run_result.stdout});
-    }
+    // _ = core.LLVMDumpModule(module);
 
-    if (run_result.stderr.len > 0) {
-        std.debug.print("{s}\n", .{run_result.stderr});
-    }
+    const main_addr = execution.LLVMGetFunctionAddress(engine, "main");
+    const MainFn = fn () callconv(.C) f32;
+    const main_fn: *const MainFn = @ptrFromInt(main_addr);
 
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Program exited with code {}\n", .{code});
-            }
-        },
-        .Signal => |sig| {
-            const desc = c.strsignal(@intCast(sig));
-            std.debug.print("Program terminated by signal {d}: {s}\n", .{ sig, std.mem.span(desc) });
-        },
-        else => unreachable,
-    }
+    _ = main_fn();
 }

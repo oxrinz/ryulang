@@ -4,12 +4,6 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const rhlo_module = b.createModule(.{
-        .root_source_file = b.path("src/codegen/rhlo/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const rllvm_dep = b.dependency("rllvm", .{});
     const rllvm_module = rllvm_dep.module("rllvm");
 
@@ -20,7 +14,6 @@ pub fn build(b: *std.Build) !void {
     });
 
     main_module.addImport("rllvm", rllvm_module);
-    main_module.addImport("rhlo", rhlo_module);
 
     const exe = b.addExecutable(.{
         .name = "ryulang",

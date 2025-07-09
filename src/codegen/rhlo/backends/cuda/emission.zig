@@ -10,8 +10,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
     defer ptx.deinit();
     var writer = ptx.writer();
 
-    // Buffer for formatting operands, reused across emitOperand calls
-    var operand_buffer: [64]u8 = undefined; // Increased size for safety
+    var operand_buffer: [64]u8 = undefined;
 
     try writer.writeAll(
         \\.version 8.4

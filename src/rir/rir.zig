@@ -6,6 +6,14 @@ pub const DType = enum {
     I64,
     F64,
     USize,
+
+    pub fn getSizeInBytes(self: DType) usize {
+        return switch (self) {
+            .I64 => 4,
+            .F64 => 4,
+            .USize => 4,
+        };
+    }
 };
 
 pub fn Buffer(comptime T: type) type {
@@ -24,6 +32,18 @@ pub const Constant = struct {
     ptr: *anyopaque,
     dtype: DType,
     shape: []const usize,
+
+    pub fn getSize(self: @This()) usize {
+        var size: usize = 1;
+        for (self.shape) |dim| {
+            size *= dim;
+        }
+        return size;
+    }
+
+    pub fn getSizeInBytes(self: @This()) usize {
+        return self.getSize() * self.dtype.getSizeInBytes();
+    }
 
     pub fn getConstant(self: @This()) union(enum) { i64: []const i64, f64: []const f64, usize: []const usize } {
         var total: usize = 1;
@@ -88,6 +108,33 @@ pub const RIROP = union(enum) {
             .add => |add| add.a.getShape(),
             .rand => |rand| rand.shape.getShape(),
             .constant => |constant| return constant.getConstantAs(usize),
+            else => unreachable,
+        };
+    }
+
+    pub fn getSizeInBytes(self: *RIROP, allocator: std.mem.Allocator) usize {
+        const input = self.findInputs(allocator);
+        return input[0].constant.getSizeInBytes();
+    }
+
+    pub fn findInputs(self: *RIROP, allocator: std.mem.Allocator) []*RIROP {
+        return switch (self.*) {
+            .add => {
+                const a_inputs = self.add.a.findInputs(allocator);
+                const b_inputs = self.add.b.findInputs(allocator);
+                var result = std.ArrayList(*RIROP).init(allocator);
+                result.appendSlice(a_inputs) catch unreachable;
+                result.appendSlice(b_inputs) catch unreachable;
+                return result.toOwnedSlice() catch unreachable;
+            },
+            .rand => {
+                return self.rand.shape.findInputs(allocator);
+            },
+            .constant => {
+                var slice = allocator.alloc(*RIROP, 1) catch unreachable;
+                slice[0] = self;
+                return slice;
+            },
             else => unreachable,
         };
     }
