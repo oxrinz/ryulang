@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const llvm = @import("rllvm").llvm;
+const rllvm = @import("rllvm");
+const llvm = rllvm.llvm;
 const target = llvm.target;
 const target_machine = llvm.target_machine;
 const types = llvm.types;
@@ -21,10 +22,6 @@ const rir = @import("rir/rir.zig");
 const dashboard = @import("dashboard.zig");
 
 const prettyprinter = @import("pretty-printer.zig");
-
-const c = @cImport({
-    @cInclude("string.h");
-});
 
 const CompilerArgs = struct {
     var llvm_emit = false;
@@ -105,7 +102,11 @@ pub fn main() anyerror!void {
     const ops = try generator.generate();
     const op_json = try dashboard.prepareOps(arena, ops);
 
-    try dashboard.sendToDashboard(arena, op_json);
+    dashboard.sendToDashboard(arena, op_json) catch |err| {
+        if (err == error.ConnectionRefused) {
+            std.debug.print("Connection to dashboard refused... Continuing without dashboard\n", .{});
+        } else return err;
+    };
 
     const module = try @import("codegen/nvidia.zig").compile(ops);
 
@@ -179,13 +180,14 @@ fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!voi
     }
     std.debug.print("ended\n", .{});
 
+    const libcuda_path = try std.process.getEnvVarOwned(allocator, "LIBCUDA");
     var child = std.process.Child.init(&[_][]const u8{
         "cc",
         "output.o",
         "-o",
         "program",
         "-g",
-        "/run/opengl-driver/lib/libcuda.so",
+        libcuda_path,
         "-lcuda",
     }, allocator);
     child.stdout = std.io.getStdOut();
@@ -197,6 +199,54 @@ fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!voi
 
     try std.fs.cwd().deleteFile(output_filename);
 }
+
+// fn execute(module: types.LLVMModuleRef) !void {
+//     // Declare printf in the module
+//     const context = core.LLVMGetModuleContext(module);
+//     const i8_ptr_ty = core.LLVMPointerType(core.LLVMInt8TypeInContext(context), 0);
+//     var param_types = [_]types.LLVMTypeRef{i8_ptr_ty};
+//     const printf_ty = core.LLVMFunctionType(core.LLVMInt32TypeInContext(context), &param_types, 1, 1 // Vararg
+//     );
+//     const printf_func = core.LLVMAddFunction(module, "printf", printf_ty);
+
+//     // Create a new function to call printf
+//     const fn_ty = core.LLVMFunctionType(core.LLVMVoidTypeInContext(context), null, 0, 0);
+//     const wrapper_fn = core.LLVMAddFunction(module, "print_hello", fn_ty);
+//     const entry = core.LLVMAppendBasicBlockInContext(context, wrapper_fn, "entry");
+//     const builder = core.LLVMCreateBuilderInContext(context);
+//     defer core.LLVMDisposeBuilder(builder);
+//     core.LLVMPositionBuilderAtEnd(builder, entry);
+
+//     // Create format string and call printf
+//     const fmt_str = core.LLVMBuildGlobalStringPtr(builder, "Hello from JIT!\n", "fmt");
+//     var args = [_]types.LLVMValueRef{fmt_str};
+//     _ = core.LLVMBuildCall2(builder, printf_ty, printf_func, &args, 1, "call_printf");
+//     _ = core.LLVMBuildRetVoid(builder);
+
+//     // Create execution engine
+//     var error_msg: [*c]u8 = null;
+//     var engine: types.LLVMExecutionEngineRef = undefined;
+//     if (execution.LLVMCreateExecutionEngineForModule(&engine, module, &error_msg) != 0) {
+//         std.debug.print("Execution engine creation failed: {s}\n", .{error_msg});
+//         core.LLVMDisposeMessage(error_msg);
+//         @panic("failed to create exec engine");
+//     }
+//     defer execution.LLVMDisposeExecutionEngine(engine);
+
+//     std.debug.print("executing\n", .{});
+
+//     // Execute the printf wrapper function
+//     const print_addr = execution.LLVMGetFunctionAddress(engine, "print_hello");
+//     const PrintFn = fn () callconv(.C) void;
+//     const print_fn: *const PrintFn = @ptrFromInt(print_addr);
+//     print_fn();
+
+//     // Execute the main function
+//     const main_addr = execution.LLVMGetFunctionAddress(engine, "main");
+//     const MainFn = fn () callconv(.C) f32;
+//     const main_fn: *const MainFn = @ptrFromInt(main_addr);
+//     _ = main_fn();
+// }
 
 fn execute(module: types.LLVMModuleRef) !void {
     var error_msg: [*c]u8 = null;

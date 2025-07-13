@@ -18,33 +18,10 @@ pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
     _ = target.LLVMInitializeNativeAsmPrinter();
     _ = target.LLVMInitializeNativeAsmParser();
 
-    _ = rllvm.llvm.support.LLVMLoadLibraryPermanently("/run/opengl-driver/lib/libcuda.so");
+    const libcuda_path = try std.process.getEnvVarOwned(arena.allocator(), "LIBCUDA");
+    _ = rllvm.llvm.support.LLVMLoadLibraryPermanently(@as([*c]const u8, libcuda_path.ptr));
 
     const module = core.LLVMModuleCreateWithName("main");
-
-    const di_builder = debug.LLVMCreateDIBuilder(module);
-    const di_file = debug.LLVMDIBuilderCreateFile(di_builder, "sb.ryu", 6, ".", 1);
-    _ = debug.LLVMDIBuilderCreateCompileUnit(
-        di_builder,
-        .LLVMDWARFSourceLanguageC,
-        di_file,
-        "TestCompiler",
-        11,
-        0,
-        "",
-        0,
-        0,
-        "",
-        0,
-        .LLVMDWARFEmissionFull,
-        0,
-        0,
-        0,
-        "",
-        0,
-        "",
-        0,
-    );
 
     const metadata = try calculateMetadata(ops);
 
@@ -60,24 +37,6 @@ pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
     const fn_type = core.LLVMFunctionType(core.LLVMInt32Type(), param_types.ptr, 2, 0);
     const function = core.LLVMAddFunction(module, "main", fn_type);
 
-    const di_subprogram = debug.LLVMDIBuilderCreateFunction(
-        di_builder,
-        di_file,
-        "main",
-        4,
-        "main",
-        4,
-        di_file,
-        1,
-        debug.LLVMDIBuilderCreateSubroutineType(di_builder, null, 0, 0, .LLVMDIFlagZero),
-        0,
-        1,
-        0,
-        .LLVMDIFlagZero,
-        0,
-    );
-    debug.LLVMSetSubprogram(function, di_subprogram);
-
     const entry = core.LLVMAppendBasicBlock(function, "entry");
 
     const builder = core.LLVMCreateBuilder();
@@ -88,11 +47,6 @@ pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
     const cuda_device = try cuda.deviceGet(module, builder);
     const cuda_context = try cuda.contextCreate(module, builder, cuda_device);
     _ = cuda_context;
-
-    // Get the module's context for debug location
-    const context = core.LLVMGetModuleContext(module);
-    const debug_loc = debug.LLVMDIBuilderCreateDebugLocation(context, 20, 5, di_subprogram, null);
-    core.LLVMSetCurrentDebugLocation2(builder, debug_loc);
 
     var h_params = std.ArrayList(rllvm.types.OpaqueRef).init(arena.allocator());
     var d_params = std.ArrayList(rllvm.types.CudaValueRef).init(arena.allocator());
@@ -125,9 +79,6 @@ pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
 
     const ptx = try @import("./rhlo/backends/cuda/cuda.zig").genTemp(module);
 
-    // Attach debug metadata to the PTX global
-    core.LLVMGlobalSetMetadata(ptx, 0, debug_loc);
-
     const cuda_module = try cuda.moduleLoadData(module, builder, .{ .ref = ptx });
     const cuda_function = try cuda.moduleGetFunction(module, builder, cuda_module);
 
@@ -155,7 +106,6 @@ pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
 
     _ = core.LLVMBuildRet(builder, zero);
 
-    debug.LLVMDIBuilderFinalize(di_builder);
     return module;
 }
 

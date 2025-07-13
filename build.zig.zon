@@ -9,8 +9,8 @@
             .hash = "rhlo-0.0.0-Zp-qnrqjAAAP1905VHiGKa7FglVOVjzp012l1Z5gqHLg",
         },
         .rllvm = .{
-            .url = "git+https://github.com/oxrinz/rllvm#bd98e6cce313b6cec8c08d83a9cb29160d06bb03",
-            .hash = "N-V-__8AAPIgAwBSfDRmgA86srHgiLhZpayYef8kzqR2Y1a3",
+            .url = "git+https://github.com/oxrinz/rllvm#c7fd84ea45875bb9accd869c779c8db466a787fc",
+            .hash = "N-V-__8AAGooAwCbg8UU9fI4slrKPgCB4wuXav-thmGhyinu",
         },
     },
     .paths = .{
