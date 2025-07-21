@@ -52,6 +52,7 @@ fn traverse(
         .divide => try std.fmt.allocPrint(alloc, "Divide", .{}),
         .call => |call_op| try std.fmt.allocPrint(alloc, "Call: {s}", .{call_op.identifier}),
         .rand => try std.fmt.allocPrint(alloc, "Random", .{}),
+        .print => try std.fmt.allocPrint(alloc, "Print", .{}),
         .constant => |const_op| try std.fmt.allocPrint(alloc, "Constant, Shape: {any}", .{const_op.shape}),
         .ret => try std.fmt.allocPrint(alloc, "Return", .{}),
     };
@@ -80,6 +81,10 @@ fn traverse(
         .rand => |rand_op| {
             const shape_id = try traverse(rand_op.shape, nodes, edges, id_counter, alloc, op_map);
             try edges.append(.{ .source = current_id, .target = shape_id });
+        },
+        .print => |print_op| {
+            const op_id = try traverse(print_op.op, nodes, edges, id_counter, alloc, op_map);
+            try edges.append(.{ .source = current_id, .target = op_id });
         },
         .ret => |ret_op| {
             const op_id = try traverse(ret_op.op, nodes, edges, id_counter, alloc, op_map);

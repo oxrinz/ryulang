@@ -9,8 +9,7 @@ zig-out/
 
 zig-cache/
 
-.ryuthon-cache/
-
 sb.ryu
+module.ll
 
 **/**.a

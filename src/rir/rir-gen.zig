@@ -138,12 +138,20 @@ pub const Generator = struct {
                 unreachable;
             },
             .builtin_call => |builtin_call| {
-                if (std.mem.eql(u8, builtin_call.identifier, "rand") == true) {
+                if (std.mem.eql(u8, builtin_call.identifier, "rand")) {
                     const shape = try self.generateExpression(builtin_call.args[0].*);
-                    result.* = .{ .rand = .{
-                        .dtype = .F64,
-                        .shape = shape,
-                    } };
+                    result.* = .{
+                        .rand = .{
+                            .dtype = .F64,
+                            .shape = shape,
+                        },
+                    };
+                } else if (std.mem.eql(u8, builtin_call.identifier, "print")) {
+                    result.* = .{
+                        .print = .{
+                            .op = try self.generateExpression(builtin_call.args[0].*),
+                        },
+                    };
                 } else unreachable;
             },
             .variable => |variable| {

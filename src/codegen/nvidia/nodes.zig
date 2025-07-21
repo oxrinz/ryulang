@@ -31,12 +31,12 @@ pub const Parameter = struct {
     output: bool = false,
 };
 
-pub const RHLOProgram = struct {
+pub const Program = struct {
     tensor_store: std.ArrayList(Tensor),
     ops: std.ArrayList(Operation),
     params: std.ArrayList(Parameter),
 
-    pub fn init(allocator: std.mem.Allocator) !RHLOProgram {
+    pub fn init(allocator: std.mem.Allocator) !Program {
         return .{
             .tensor_store = std.ArrayList(Tensor).init(allocator),
             .ops = std.ArrayList(Operation).init(allocator),

@@ -18,7 +18,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
         \\.address_size 64
     );
 
-    const kernel = ast.kernels[0]; // Process first kernel
+    const kernel = ast.kernels[0];
     try writer.writeAll("\n.visible .entry main(\n");
     for (kernel.params, 0..) |param, i| {
         try writer.print("  .param .u64 {s}{s}\n", .{ param, if (i < kernel.params.len - 1) "," else "" });

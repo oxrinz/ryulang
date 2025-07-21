@@ -108,7 +108,7 @@ pub fn main() anyerror!void {
         } else return err;
     };
 
-    const module = try @import("codegen/nvidia.zig").compile(ops);
+    const module = try @import("codegen.zig").compile(ops);
 
     if (dump_llvm == true) {
         std.debug.print("\n========= LLVM =========\n", .{});
@@ -121,6 +121,15 @@ pub fn main() anyerror!void {
         }
         std.debug.print("Module dumped to {s}\n", .{filename});
         std.debug.print("===========================\n", .{});
+    }
+
+    var error_msg: [*c]u8 = null;
+    if (analysis.LLVMVerifyModule(module, .LLVMReturnStatusAction, &error_msg) != 0) {
+        if (error_msg != null) {
+            std.debug.print("Module verification failed: {s}\n", .{error_msg});
+            core.LLVMDisposeMessage(error_msg);
+        }
+        return error.InvalidModule;
     }
 
     if (mem.eql(u8, cmd, "run")) {
@@ -158,19 +167,10 @@ fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!voi
     }
     defer target_machine.LLVMDisposeTargetMachine(tm);
 
-    if (analysis.LLVMVerifyModule(module, .LLVMReturnStatusAction, &error_msg) != 0) {
-        if (error_msg != null) {
-            std.debug.print("Module verification failed: {s}\n", .{error_msg});
-            core.LLVMDisposeMessage(error_msg);
-        }
-        return error.InvalidModule;
-    }
-
     const debug_version = debug.LLVMDebugMetadataVersion();
     const debug_val = core.LLVMValueAsMetadata(core.LLVMConstInt(core.LLVMInt32Type(), debug_version, 0));
     const key = "Debug Info Version";
     core.LLVMAddModuleFlag(module, .LLVMModuleFlagBehaviorWarning, key, key.len, debug_val);
-    std.debug.print("ended\n", .{});
 
     const output_filename = "output.o";
     if (target_machine.LLVMTargetMachineEmitToFile(tm, module, output_filename, .LLVMObjectFile, &error_msg) != 0) {
@@ -178,7 +178,6 @@ fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!voi
         core.LLVMDisposeMessage(error_msg);
         return error.EmitError;
     }
-    std.debug.print("ended\n", .{});
 
     const libcuda_path = try std.process.getEnvVarOwned(allocator, "LIBCUDA");
     var child = std.process.Child.init(&[_][]const u8{
@@ -200,54 +199,6 @@ fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!voi
     try std.fs.cwd().deleteFile(output_filename);
 }
 
-// fn execute(module: types.LLVMModuleRef) !void {
-//     // Declare printf in the module
-//     const context = core.LLVMGetModuleContext(module);
-//     const i8_ptr_ty = core.LLVMPointerType(core.LLVMInt8TypeInContext(context), 0);
-//     var param_types = [_]types.LLVMTypeRef{i8_ptr_ty};
-//     const printf_ty = core.LLVMFunctionType(core.LLVMInt32TypeInContext(context), &param_types, 1, 1 // Vararg
-//     );
-//     const printf_func = core.LLVMAddFunction(module, "printf", printf_ty);
-
-//     // Create a new function to call printf
-//     const fn_ty = core.LLVMFunctionType(core.LLVMVoidTypeInContext(context), null, 0, 0);
-//     const wrapper_fn = core.LLVMAddFunction(module, "print_hello", fn_ty);
-//     const entry = core.LLVMAppendBasicBlockInContext(context, wrapper_fn, "entry");
-//     const builder = core.LLVMCreateBuilderInContext(context);
-//     defer core.LLVMDisposeBuilder(builder);
-//     core.LLVMPositionBuilderAtEnd(builder, entry);
-
-//     // Create format string and call printf
-//     const fmt_str = core.LLVMBuildGlobalStringPtr(builder, "Hello from JIT!\n", "fmt");
-//     var args = [_]types.LLVMValueRef{fmt_str};
-//     _ = core.LLVMBuildCall2(builder, printf_ty, printf_func, &args, 1, "call_printf");
-//     _ = core.LLVMBuildRetVoid(builder);
-
-//     // Create execution engine
-//     var error_msg: [*c]u8 = null;
-//     var engine: types.LLVMExecutionEngineRef = undefined;
-//     if (execution.LLVMCreateExecutionEngineForModule(&engine, module, &error_msg) != 0) {
-//         std.debug.print("Execution engine creation failed: {s}\n", .{error_msg});
-//         core.LLVMDisposeMessage(error_msg);
-//         @panic("failed to create exec engine");
-//     }
-//     defer execution.LLVMDisposeExecutionEngine(engine);
-
-//     std.debug.print("executing\n", .{});
-
-//     // Execute the printf wrapper function
-//     const print_addr = execution.LLVMGetFunctionAddress(engine, "print_hello");
-//     const PrintFn = fn () callconv(.C) void;
-//     const print_fn: *const PrintFn = @ptrFromInt(print_addr);
-//     print_fn();
-
-//     // Execute the main function
-//     const main_addr = execution.LLVMGetFunctionAddress(engine, "main");
-//     const MainFn = fn () callconv(.C) f32;
-//     const main_fn: *const MainFn = @ptrFromInt(main_addr);
-//     _ = main_fn();
-// }
-
 fn execute(module: types.LLVMModuleRef) !void {
     var error_msg: [*c]u8 = null;
     var engine: types.LLVMExecutionEngineRef = undefined;
@@ -257,8 +208,6 @@ fn execute(module: types.LLVMModuleRef) !void {
         @panic("failed to create exec engine");
     }
     defer execution.LLVMDisposeExecutionEngine(engine);
-
-    // _ = core.LLVMDumpModule(module);
 
     const main_addr = execution.LLVMGetFunctionAddress(engine, "main");
     const MainFn = fn () callconv(.C) f32;

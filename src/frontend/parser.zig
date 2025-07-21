@@ -6,25 +6,12 @@ const ast = @import("ast.zig");
 const diagnostics = @import("../diagnostics.zig");
 const rir = @import("../rir/rir.zig");
 
-const BuiltinFnType = enum {
-    PRINT,
-};
-
-var builtin_fns: std.StringHashMap(BuiltinFnType) = undefined;
-
-pub fn initBuiltinFns(allocator: std.mem.Allocator) !void {
-    builtin_fns = std.StringHashMap(BuiltinFnType).init(allocator);
-
-    try builtin_fns.put("print", .PRINT);
-}
-
 pub const Parser = struct {
     tokens: []const Token,
     cursor: usize,
     allocator: std.mem.Allocator,
 
     pub fn init(tokens: []const Token, allocator: std.mem.Allocator) !Parser {
-        try initBuiltinFns(allocator);
         return Parser{
             .tokens = tokens,
             .cursor = 0,
@@ -143,22 +130,20 @@ pub const Parser = struct {
                     else => unreachable,
                 };
 
-                // Allocate memory for the value
                 const number: *anyopaque = switch (literal) {
                     .integer => blk: {
-                        const ptr = try self.allocator.create(i32);
+                        const ptr = try self.allocator.create(i64);
                         ptr.* = literal.integer;
                         break :blk @ptrCast(ptr);
                     },
                     .float => blk: {
-                        const ptr = try self.allocator.create(f32);
+                        const ptr = try self.allocator.create(f64);
                         ptr.* = literal.float;
                         break :blk @ptrCast(ptr);
                     },
                     else => unreachable,
                 };
 
-                // Allocate memory for the shape
                 const shape = try self.allocator.create([1]usize);
                 shape.* = [_]usize{1};
 

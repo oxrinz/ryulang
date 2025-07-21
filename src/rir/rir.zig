@@ -97,6 +97,10 @@ pub const RIROP = union(enum) {
         shape: *RIROP,
     },
 
+    print: struct {
+        op: *RIROP,
+    },
+
     constant: Constant,
 
     ret: struct {
@@ -107,6 +111,7 @@ pub const RIROP = union(enum) {
         return switch (self) {
             .add => |add| add.a.getShape(),
             .rand => |rand| rand.shape.getShape(),
+            .print => |print| print.op.getShape(),
             .constant => |constant| return constant.getConstantAs(usize),
             else => unreachable,
         };
@@ -129,6 +134,9 @@ pub const RIROP = union(enum) {
             },
             .rand => {
                 return self.rand.shape.findInputs(allocator);
+            },
+            .print => {
+                return self.print.op.findInputs(allocator);
             },
             .constant => {
                 var slice = allocator.alloc(*RIROP, 1) catch unreachable;

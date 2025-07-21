@@ -11,34 +11,6 @@ const execution = rllvm.llvm.engine;
 const ptxast = @import("./ast.zig");
 const nodes = @import("../../nodes.zig");
 
-pub fn genTemp(module: types.LLVMModuleRef) !types.LLVMValueRef {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const kernel = ptxast.Kernel{
-        .name = "main",
-        .body = std.ArrayList(ptxast.Instruction).init(allocator).items,
-        .directives = std.ArrayList(ptxast.Directive).init(allocator).items,
-        .params = std.ArrayList([]const u8).init(allocator).items,
-    };
-
-    const globals = &[_]ptxast.GlobalDecl{};
-    var kernels = [_]ptxast.Kernel{kernel};
-    const ast = ptxast.PTXAst{ .allocator = allocator, .globals = globals, .kernels = &kernels };
-    const ptx = try @import("./emission.zig").emit(allocator, ast);
-
-    const kernel_len = ptx.len; // Length includes the null terminator
-    // Define global as an array of i8, not a pointer
-    const global_ptx_str = core.LLVMAddGlobal(module, core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_len)), "ptx_str");
-
-    // Create constant string, assuming ptx includes \00, so no extra null is added
-    const kernel_constant = core.LLVMConstString(@ptrCast(ptx), @intCast(kernel_len), 1);
-    core.LLVMSetInitializer(global_ptx_str, kernel_constant);
-
-    return global_ptx_str;
-}
-
 pub fn generatePTX(module: types.LLVMModuleRef, program: nodes.RHLOProgram) !types.LLVMValueRef {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();

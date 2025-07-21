@@ -140,10 +140,10 @@ pub const Lexer = struct {
         const number_str = self.source[self.start..self.currentIndex];
 
         if (is_float) {
-            const float_value = std.fmt.parseFloat(f32, number_str) catch @panic("failed to parse float");
+            const float_value = std.fmt.parseFloat(f64, number_str) catch @panic("failed to parse float");
             return Token.init(.NUMBER, .{ .float = float_value }, self.currentLine, self.currentColumn);
         } else {
-            const int_value = std.fmt.parseInt(i32, number_str, 10) catch @panic("failed to parse int");
+            const int_value = std.fmt.parseInt(i64, number_str, 10) catch @panic("failed to parse int");
             return Token.init(.NUMBER, .{ .integer = int_value }, self.currentLine, self.currentColumn);
         }
     }
