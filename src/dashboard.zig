@@ -1,5 +1,3 @@
-// NOTE: AI slop, but works
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -96,50 +94,74 @@ fn traverse(
     return current_id;
 }
 
-pub fn prepareOps(allocator: Allocator, ops: []*rir.RIROP) anyerror![]const u8 {
-    var nodes = std.AutoHashMap(usize, Node).init(allocator);
-    defer nodes.deinit();
+pub const Stage = struct {
+    title: []const u8,
+    ops: []*rir.RIROP,
+};
 
-    var edges = std.ArrayList(Edge).init(allocator);
-    defer edges.deinit();
+pub fn prepareStages(allocator: Allocator, stages: []const Stage) anyerror![]const u8 {
+    const SerializableNode = struct { id: usize, title: []const u8 };
+    const SerializableEdge = struct { source: usize, target: usize };
 
-    var id_counter: usize = 0;
-
-    var op_map = std.AutoHashMap(*rir.RIROP, usize).init(allocator);
-    defer op_map.deinit();
+    const Config = struct {
+        id: []const u8,
+        title: []const u8,
+        data: struct {
+            nodes: []const SerializableNode,
+            edges: []const SerializableEdge,
+        },
+    };
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    for (ops) |op| {
-        _ = try traverse(op, &nodes, &edges, &id_counter, arena_allocator, &op_map);
-    }
+    var configs = std.ArrayList(Config).init(allocator);
+    defer configs.deinit();
 
-    const SerializableNode = struct { id: []const u8, title: []const u8 };
-    var node_array = std.ArrayList(SerializableNode).init(allocator);
-    defer node_array.deinit();
-    var node_iter = nodes.iterator();
-    while (node_iter.next()) |entry| {
-        const id_str = try std.fmt.allocPrint(arena_allocator, "{}", .{entry.key_ptr.*});
-        try node_array.append(.{ .id = id_str, .title = entry.value_ptr.title });
-    }
+    for (stages, 0..) |stage, stage_index| {
+        var nodes = std.AutoHashMap(usize, Node).init(arena_allocator);
+        defer nodes.deinit();
 
-    const SerializableEdge = struct { source: []const u8, target: []const u8 };
-    var edge_array = std.ArrayList(SerializableEdge).init(allocator);
-    defer edge_array.deinit();
-    for (edges.items) |edge| {
-        const source_str = try std.fmt.allocPrint(arena_allocator, "{}", .{edge.source});
-        const target_str = try std.fmt.allocPrint(arena_allocator, "{}", .{edge.target});
-        try edge_array.append(.{ .source = source_str, .target = target_str });
+        var edges = std.ArrayList(Edge).init(arena_allocator);
+        defer edges.deinit();
+
+        var id_counter: usize = 0;
+        var op_map = std.AutoHashMap(*rir.RIROP, usize).init(arena_allocator);
+        defer op_map.deinit();
+
+        for (stage.ops) |op| {
+            _ = try traverse(op, &nodes, &edges, &id_counter, arena_allocator, &op_map);
+        }
+
+        var node_array = std.ArrayList(SerializableNode).init(allocator);
+        defer node_array.deinit();
+        var node_iter = nodes.iterator();
+        while (node_iter.next()) |entry| {
+            try node_array.append(.{ .id = entry.key_ptr.*, .title = entry.value_ptr.title });
+        }
+
+        var edge_array = std.ArrayList(SerializableEdge).init(allocator);
+        defer edge_array.deinit();
+        for (edges.items) |edge| {
+            try edge_array.append(.{ .source = edge.source, .target = edge.target });
+        }
+
+        const stage_id = try std.fmt.allocPrint(allocator, "stage{d}", .{stage_index});
+
+        try configs.append(Config{
+            .id = stage_id,
+            .title = stage.title,
+            .data = .{
+                .nodes = try node_array.toOwnedSlice(),
+                .edges = try edge_array.toOwnedSlice(),
+            },
+        });
     }
 
     var buffer = std.ArrayList(u8).init(allocator);
     defer buffer.deinit();
-    try std.json.stringify(.{
-        .nodes = node_array.items,
-        .edges = edge_array.items,
-    }, .{}, buffer.writer());
 
+    try std.json.stringify(configs.items, .{}, buffer.writer());
     return buffer.toOwnedSlice();
 }

@@ -100,7 +100,13 @@ pub fn main() anyerror!void {
 
     var generator = Generator.init(module_definition, arena);
     const ops = try generator.generate();
-    const op_json = try dashboard.prepareOps(arena, ops);
+
+    const base_graph_stage = dashboard.Stage{
+        .title = "Base Graph",
+        .ops = ops,
+    };
+    const stages = [_]dashboard.Stage{base_graph_stage};
+    const op_json = try dashboard.prepareStages(arena, &stages);
 
     dashboard.sendToDashboard(arena, op_json) catch |err| {
         if (err == error.ConnectionRefused) {

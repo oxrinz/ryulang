@@ -1,5 +1,5 @@
 export interface Node {
-    id: string,
+    id: number,
     title: string,
 }
 
@@ -11,4 +11,10 @@ export interface Edge {
 export interface Data {
     nodes: Node[],
     edges: Edge[]
+}
+
+export interface DataConfiguration {
+    id: string,
+    title: string,
+    data: Data
 }
