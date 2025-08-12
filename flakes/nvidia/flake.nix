@@ -30,6 +30,7 @@
             pkgconf
             gcc13
             lldb
+            nodejs
           ];
 
           shellHook = ''

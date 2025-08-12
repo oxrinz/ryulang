@@ -27,6 +27,15 @@ pub fn compile(module: types.LLVMModuleRef, builder: types.LLVMBuilderRef, param
     var h_params = std.ArrayList(types.LLVMValueRef).init(arena.allocator());
     var d_params = std.ArrayList(types.LLVMValueRef).init(arena.allocator());
     var output_indices = std.ArrayList(usize).init(arena.allocator());
+    var input_count: usize = 0;
+
+    // Count inputs first to determine kernel parameters
+    for (params) |param| {
+        switch (param.*) {
+            .constant => input_count += 1,
+            else => {},
+        }
+    }
 
     for (params, 0..) |param, idx| {
         const size_bytes = core.LLVMConstInt(core.LLVMInt64Type(), 4, 0);
@@ -59,7 +68,8 @@ pub fn compile(module: types.LLVMModuleRef, builder: types.LLVMBuilderRef, param
         }
     }
 
-    const ptx = try genReturnFirstParam(module);
+    // Generate PTX kernel based on actual parameter count and operation
+    const ptx = try generateKernel(module, input_count);
 
     const cuda_module = try cuda.moduleLoadData(module, builder, ptx);
     const cuda_function = try cuda.moduleGetFunction(module, builder, cuda_module);
@@ -80,7 +90,7 @@ pub fn compile(module: types.LLVMModuleRef, builder: types.LLVMBuilderRef, param
         try cuda.copyDToH(module, builder, d_params.items[idx], h_params.items[idx], size_bytes);
 
         const loaded_float = core.LLVMBuildLoad2(builder, core.LLVMFloatType(), h_params.items[idx], "loaded_float");
-        const loaded_value = core.LLVMBuildFPToSI(builder, loaded_float, core.LLVMInt64Type(), "loaded_value");
+        const loaded_value = core.LLVMBuildFPToSI(builder, loaded_float, core.LLVMInt32Type(), "loaded_value");
         try rllvm.utils.printInt(module, builder, loaded_value);
     }
 
@@ -112,17 +122,21 @@ fn calculateMetadata(ops: []*rir.RIROP) !KernelData {
     };
 }
 
-pub fn genReturnFirstParam(module: types.LLVMModuleRef) !types.LLVMValueRef {
+fn generateKernel(module: types.LLVMModuleRef, input_count: usize) !types.LLVMValueRef {
     const allocator = arena.allocator();
 
     var instructions = std.ArrayList(ptxast.Instruction).init(allocator);
-
     var directives = std.ArrayList(ptxast.Directive).init(allocator);
+    var params = std.ArrayList([]const u8).init(allocator);
+
+    // Calculate total parameters (inputs + 1 output)
+    const total_params = input_count + 1;
+    const reg_count = total_params + 1; // Extra registers for computation
 
     try directives.append(.{
         .reg = .{
             .name = "%rd",
-            .count = 3,
+            .count = @intCast(reg_count),
             .type = .b64,
         },
     });
@@ -130,27 +144,62 @@ pub fn genReturnFirstParam(module: types.LLVMModuleRef) !types.LLVMValueRef {
     try directives.append(.{
         .reg = .{
             .name = "%f",
-            .count = 3,
+            .count = @intCast(reg_count),
             .type = .f32,
         },
     });
 
-    try instructions.append(.{ .ld = .{ .space = .param, .type = .u64, .src = .{ .parameter = "param_0" }, .dest = .{ .register = "%rd0" } } });
-    try instructions.append(.{ .ld = .{ .space = .param, .type = .u64, .src = .{ .parameter = "param_1" }, .dest = .{ .register = "%rd1" } } });
-    try instructions.append(.{ .ld = .{ .space = .param, .type = .u64, .src = .{ .parameter = "param_2" }, .dest = .{ .register = "%rd2" } } });
-    try instructions.append(.{ .cvta = .{ .to_generic = true, .space = .global, .type = .u64, .src = .{ .register = "%rd0" }, .dest = .{ .register = "%rd0" } } });
-    try instructions.append(.{ .cvta = .{ .to_generic = true, .space = .global, .type = .u64, .src = .{ .register = "%rd1" }, .dest = .{ .register = "%rd1" } } });
-    try instructions.append(.{ .cvta = .{ .to_generic = true, .space = .global, .type = .u64, .src = .{ .register = "%rd2" }, .dest = .{ .register = "%rd2" } } });
-    try instructions.append(.{ .ld = .{ .space = .global, .type = .f32, .src = .{ .register = "%rd0" }, .dest = .{ .register = "%f0" } } });
-    try instructions.append(.{ .ld = .{ .space = .global, .type = .f32, .src = .{ .register = "%rd1" }, .dest = .{ .register = "%f1" } } });
-    try instructions.append(.{ .add = .{ .type = .f32, .src1 = .{ .register = "%f0" }, .src2 = .{ .register = "%f1" }, .dest = .{ .register = "%f2" } } });
-    try instructions.append(.{ .st = .{ .space = .global, .type = .f32, .dest = .{ .register = "%rd2" }, .src = .{ .register = "%f2" } } });
-    try instructions.append(.ret);
+    // Load all parameters
+    for (0..total_params) |i| {
+        const param_name = try std.fmt.allocPrint(allocator, "param_{d}", .{i});
+        const rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{i});
 
-    var params = std.ArrayList([]const u8).init(allocator);
-    try params.append("param_0");
-    try params.append("param_1");
-    try params.append("param_2");
+        try params.append(param_name);
+        try instructions.append(.{ .ld = .{ .space = .param, .type = .u64, .src = .{ .parameter = param_name }, .dest = .{ .register = rd_reg } } });
+    }
+
+    // Convert to global addresses
+    for (0..total_params) |i| {
+        const rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{i});
+        try instructions.append(.{ .cvta = .{ .to_generic = true, .space = .global, .type = .u64, .src = .{ .register = rd_reg }, .dest = .{ .register = rd_reg } } });
+    }
+
+    // Load input values
+    for (0..input_count) |i| {
+        const rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{i});
+        const f_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{i});
+
+        try instructions.append(.{ .ld = .{ .space = .global, .type = .f32, .src = .{ .register = rd_reg }, .dest = .{ .register = f_reg } } });
+    }
+
+    // Perform computation based on number of inputs
+    const result_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{input_count});
+    if (input_count == 1) {
+        // Just copy the input to output (identity operation)
+        const f0_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{0});
+        try instructions.append(.{ .mov = .{ .type = .f32, .src = .{ .register = f0_reg }, .dest = .{ .register = result_reg } } });
+    } else if (input_count == 2) {
+        // Add two inputs
+        const f0_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{0});
+        const f1_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{1});
+        try instructions.append(.{ .add = .{ .type = .f32, .src1 = .{ .register = f0_reg }, .src2 = .{ .register = f1_reg }, .dest = .{ .register = result_reg } } });
+    } else {
+        // For more inputs, chain additions
+        var current_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{0});
+        for (1..input_count) |i| {
+            const next_input_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{i});
+            const temp_reg = if (i == input_count - 1) result_reg else try std.fmt.allocPrint(allocator, "%f{d}", .{input_count + i});
+
+            try instructions.append(.{ .add = .{ .type = .f32, .src1 = .{ .register = current_reg }, .src2 = .{ .register = next_input_reg }, .dest = .{ .register = temp_reg } } });
+            current_reg = temp_reg;
+        }
+    }
+
+    // Store result to output
+    const output_rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{input_count});
+    try instructions.append(.{ .st = .{ .space = .global, .type = .f32, .dest = .{ .register = output_rd_reg }, .src = .{ .register = result_reg } } });
+
+    try instructions.append(.ret);
 
     const kernel = ptxast.Kernel{
         .name = "main",
@@ -170,4 +219,9 @@ pub fn genReturnFirstParam(module: types.LLVMModuleRef) !types.LLVMValueRef {
     core.LLVMSetInitializer(global_ptx_str, kernel_constant);
 
     return global_ptx_str;
+}
+
+// Keep the old function for backward compatibility, but mark it as deprecated
+pub fn genReturnFirstParam(module: types.LLVMModuleRef) !types.LLVMValueRef {
+    return generateKernel(module, 2); // Default to 2 inputs for the old hardcoded kernel
 }

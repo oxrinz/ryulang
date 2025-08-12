@@ -13,3 +13,6 @@ sb.ryu
 module.ll
 
 **/**.a
+
+.direnv/
+.envrc

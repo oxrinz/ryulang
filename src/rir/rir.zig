@@ -78,34 +78,18 @@ pub const Constant = struct {
 };
 
 pub const RIROP = union(enum) {
-    add: struct {
-        a: *RIROP,
-        b: *RIROP,
-    },
-    divide: struct {
-        a: *RIROP,
-        b: *RIROP,
-    },
+    add: struct { a: *RIROP, b: *RIROP },
+    divide: struct { a: *RIROP, b: *RIROP },
 
-    call: struct {
-        identifier: []const u8,
-        args: *[]*RIROP,
-    },
+    call: struct { identifier: []const u8, args: *[]*RIROP },
 
-    rand: struct {
-        dtype: DType,
-        shape: *RIROP,
-    },
+    rand: struct { dtype: DType, shape: *RIROP },
 
-    print: struct {
-        op: *RIROP,
-    },
+    print: struct { op: *RIROP },
 
     constant: Constant,
 
-    ret: struct {
-        op: *RIROP,
-    },
+    ret: struct { op: *RIROP },
 
     pub fn getShape(self: RIROP) []const usize {
         return switch (self) {
