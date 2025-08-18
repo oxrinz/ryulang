@@ -132,24 +132,25 @@ pub const Generator = struct {
             .constant => |constant| {
                 result.* = .{ .constant = constant };
             },
-
             .call => |call| {
                 _ = call;
                 unreachable;
             },
             .builtin_call => |builtin_call| {
                 if (std.mem.eql(u8, builtin_call.identifier, "rand")) {
-                    const shape = try self.generateExpression(builtin_call.args[0].*);
-                    result.* = .{
-                        .rand = .{
-                            .dtype = .F64,
-                            .shape = shape,
-                        },
-                    };
+                    unreachable;
                 } else if (std.mem.eql(u8, builtin_call.identifier, "print")) {
                     result.* = .{
                         .print = .{
                             .op = try self.generateExpression(builtin_call.args[0].*),
+                        },
+                    };
+                } else if (std.mem.eql(u8, builtin_call.identifier, "Tensor")) {
+                    const shape = try self.generateExpression(builtin_call.args[0].*);
+                    result.* = .{
+                        .constant = .{
+                            .dtype = .F64,
+                            .shape = shape,
                         },
                     };
                 } else unreachable;

@@ -81,9 +81,8 @@ pub const RIROP = union(enum) {
     add: struct { a: *RIROP, b: *RIROP },
     divide: struct { a: *RIROP, b: *RIROP },
 
+    // TODO: eliminate call
     call: struct { identifier: []const u8, args: *[]*RIROP },
-
-    rand: struct { dtype: DType, shape: *RIROP },
 
     print: struct { op: *RIROP },
 
@@ -94,7 +93,6 @@ pub const RIROP = union(enum) {
     pub fn getShape(self: RIROP) []const usize {
         return switch (self) {
             .add => |add| add.a.getShape(),
-            .rand => |rand| rand.shape.getShape(),
             .print => |print| print.op.getShape(),
             .constant => |constant| return constant.getConstantAs(usize),
             else => unreachable,
@@ -115,9 +113,6 @@ pub const RIROP = union(enum) {
                 result.appendSlice(a_inputs) catch unreachable;
                 result.appendSlice(b_inputs) catch unreachable;
                 return result.toOwnedSlice() catch unreachable;
-            },
-            .rand => {
-                return self.rand.shape.findInputs(allocator);
             },
             .print => {
                 return self.print.op.findInputs(allocator);

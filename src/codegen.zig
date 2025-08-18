@@ -11,13 +11,13 @@ const debug = rllvm.llvm.debug;
 
 const rir = @import("rir/rir.zig");
 
-const nvidia = @import("./codegen/nvidia.zig");
+const nvidia = @import("./backends/nvidia.zig");
 
 pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-
     const allocator = arena.allocator();
 
+    // init llvm stuff
     _ = target.LLVMInitializeNativeTarget();
     _ = target.LLVMInitializeNativeAsmPrinter();
     _ = target.LLVMInitializeNativeAsmParser();
@@ -28,6 +28,7 @@ pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
     const module = core.LLVMModuleCreateWithName("main");
     const builder = core.LLVMCreateBuilder();
 
+    //TODO: add a check to make sure no duplicate ops are added
     var params = std.ArrayList(*rir.RIROP).init(allocator);
     for (ops) |op| {
         try params.appendSlice(op.findInputs(allocator));
@@ -42,23 +43,15 @@ pub fn compile(ops: []*rir.RIROP) !types.LLVMModuleRef {
     defer core.LLVMDisposeBuilder(builder);
     core.LLVMPositionBuilderAtEnd(builder, entry);
 
-    for (ops) |op| {
-        switch (op.*) {
-            .add => {},
-            .constant => {},
-            .print => {},
-            .rand => {},
-            else => unreachable,
-        }
-    }
+    // NOTE: optimization passes would go here
 
-    const result = @import("codegen/nvidia.zig").compile(module, builder, params.items);
+    try nvidia.compile(module, builder, params.items);
 
     const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
 
     _ = core.LLVMBuildRet(builder, zero);
 
-    return result;
+    return module;
 }
 
 fn generateRIROP(op: rir.RIROP) !void {

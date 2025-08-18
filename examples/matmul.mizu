@@ -1,0 +1,10 @@
+define buffers {
+    b1 =  [address]
+}
+define kernels {
+    k1 = "./kernel.ptx"
+}
+
+k1.launch()
+b1.memcpy(dtoh)
+print(b1 as [2,2])
