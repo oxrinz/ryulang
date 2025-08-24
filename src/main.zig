@@ -17,7 +17,7 @@ const Allocator = std.mem.Allocator;
 const diagnostics = @import("diagnostics.zig");
 const Lexer = @import("frontend/lexer.zig").Lexer;
 const Parser = @import("frontend/parser.zig").Parser;
-const Generator = @import("rir/rir-gen.zig").Generator;
+const gen = @import("rir/rir-gen.zig");
 const rir = @import("rir/rir.zig");
 const dashboard = @import("dashboard.zig");
 
@@ -98,8 +98,8 @@ pub fn main() anyerror!void {
         std.debug.print("===========================\n", .{});
     }
 
-    var generator = Generator.init(module_definition, arena);
-    const ops = try generator.generate();
+    var program = try gen.generateProgram(module_definition, arena);
+    const ops = program.graph;
 
     const base_graph_stage = dashboard.Stage{
         .title = "Base Graph",
@@ -114,7 +114,7 @@ pub fn main() anyerror!void {
         } else return err;
     };
 
-    const module = try @import("codegen.zig").compile(ops);
+    const module = try program.compile();
 
     if (dump_llvm == true) {
         std.debug.print("\n========= LLVM =========\n", .{});

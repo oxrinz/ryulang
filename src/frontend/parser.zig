@@ -125,8 +125,8 @@ pub const Parser = struct {
             .NUMBER => {
                 const literal = self.curr().literal.?;
                 const dtype: rir.DType = switch (literal) {
-                    .integer => .I64,
-                    .float => .F64,
+                    .integer => .i64,
+                    .float => .f64,
                     else => unreachable,
                 };
 

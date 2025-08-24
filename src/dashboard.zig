@@ -48,10 +48,10 @@ fn traverse(
     const title: []const u8 = switch (op) {
         .add => try std.fmt.allocPrint(alloc, "Add", .{}),
         .divide => try std.fmt.allocPrint(alloc, "Divide", .{}),
-        .call => |call_op| try std.fmt.allocPrint(alloc, "Call: {s}", .{call_op.identifier}),
-        .print => try std.fmt.allocPrint(alloc, "Print", .{}),
         .constant => |const_op| try std.fmt.allocPrint(alloc, "Constant, Shape: {any}", .{const_op.shape}),
-        .ret => try std.fmt.allocPrint(alloc, "Return", .{}),
+        else => {
+            return 0;
+        },
     };
 
     try nodes.put(current_id, .{ .title = title });
@@ -69,21 +69,7 @@ fn traverse(
             try edges.append(.{ .source = current_id, .target = a_id });
             try edges.append(.{ .source = current_id, .target = b_id });
         },
-        .call => |call_op| {
-            for (call_op.args.*) |arg_ptr| {
-                const arg_id = try traverse(arg_ptr, nodes, edges, id_counter, alloc, op_map);
-                try edges.append(.{ .source = current_id, .target = arg_id });
-            }
-        },
-        .print => |print_op| {
-            const op_id = try traverse(print_op.op, nodes, edges, id_counter, alloc, op_map);
-            try edges.append(.{ .source = current_id, .target = op_id });
-        },
-        .ret => |ret_op| {
-            const op_id = try traverse(ret_op.op, nodes, edges, id_counter, alloc, op_map);
-            try edges.append(.{ .source = current_id, .target = op_id });
-        },
-        .constant => {},
+        else => {},
     }
 
     return current_id;
