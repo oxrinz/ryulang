@@ -38,7 +38,6 @@ pub const DataType = enum {
     b32,
     b64,
     pred,
-
     pub fn toString(self: DataType) []const u8 {
         return @tagName(self);
     }
@@ -49,7 +48,6 @@ pub const SpaceType = enum {
     shared,
     local,
     param,
-
     pub fn toString(self: SpaceType) []const u8 {
         return @tagName(self);
     }
@@ -67,6 +65,8 @@ pub const Instruction = union(enum) {
     cvta: ConvertToAddrInst,
     fma: FusedMultiplyAddInst,
     shfl: ShuffleInst,
+    setp: SetpInst,
+    label: LabelInst,
     comment: []const u8,
     ret,
 };
@@ -77,6 +77,22 @@ pub const AddInst = struct {
     src2: Operand,
     type: DataType,
     wide: bool = false,
+    modifier: enum {
+        none,
+        lo,
+        hi,
+        wide,
+        sat,
+        pub fn toString(self: @This()) []const u8 {
+            return switch (self) {
+                .none => "",
+                .lo => ".lo",
+                .hi => ".hi",
+                .wide => ".wide",
+                .sat => ".sat",
+            };
+        }
+    } = .none,
 };
 
 pub const AndInst = struct {
@@ -92,6 +108,22 @@ pub const FusedMultiplyAddInst = struct {
     src2: Operand,
     src3: Operand,
     type: DataType,
+    modifier: enum {
+        none,
+        lo,
+        hi,
+        wide,
+        sat,
+        pub fn toString(self: @This()) []const u8 {
+            return switch (self) {
+                .none => "",
+                .lo => ".lo",
+                .hi => ".hi",
+                .wide => ".wide",
+                .sat => ".sat",
+            };
+        }
+    } = .none,
 };
 
 pub const MulInst = struct {
@@ -165,13 +197,11 @@ pub const ShuffleInst = struct {
     mask: Operand,
     type: DataType,
     mode: Mode,
-
     pub const Mode = enum {
         up,
         down,
         bfly,
         idx,
-
         pub fn toString(self: Mode) []const u8 {
             return switch (self) {
                 .up => "up",
@@ -181,6 +211,29 @@ pub const ShuffleInst = struct {
             };
         }
     };
+};
+
+pub const SetpInst = struct {
+    dest: []const u8,
+    src1: Operand,
+    src2: Operand,
+    type: DataType,
+    cmp: CompareOp,
+    pub const CompareOp = enum {
+        eq,
+        ne,
+        lt,
+        le,
+        gt,
+        ge,
+        pub fn toString(self: CompareOp) []const u8 {
+            return @tagName(self);
+        }
+    };
+};
+
+pub const LabelInst = struct {
+    name: []const u8,
 };
 
 pub const Kernel = struct {
@@ -211,12 +264,10 @@ pub const PTXAst = struct {
     kernels: []Kernel,
     globals: []GlobalDecl,
     allocator: std.mem.Allocator,
-
     fn deinit(self: *PTXAst) void {
         for (self.kernels) |kernel| {
             self.allocator.free(kernel.params);
             self.allocator.free(kernel.body);
-            self.allocator.free(kernel.registers);
             self.allocator.free(kernel.directives);
         }
         self.allocator.free(self.kernels);

@@ -14,12 +14,15 @@ const analysis = llvm.analysis;
 
 const Allocator = std.mem.Allocator;
 
+const pm = @import("rir/pattern-matcher.zig");
+
 const diagnostics = @import("diagnostics.zig");
 const Lexer = @import("frontend/lexer.zig").Lexer;
 const Parser = @import("frontend/parser.zig").Parser;
 const gen = @import("rir/rir-gen.zig");
 const rir = @import("rir/rir.zig");
 const dashboard = @import("dashboard.zig");
+const engine = @import("engine.zig");
 
 const prettyprinter = @import("pretty-printer.zig");
 
@@ -98,23 +101,15 @@ pub fn main() anyerror!void {
         std.debug.print("===========================\n", .{});
     }
 
-    var program = try gen.generateProgram(module_definition, arena);
-    const ops = program.graph;
-
-    const base_graph_stage = dashboard.Stage{
-        .title = "Base Graph",
-        .ops = ops,
-    };
-    const stages = [_]dashboard.Stage{base_graph_stage};
-    const op_json = try dashboard.prepareStages(arena, &stages);
-
-    dashboard.sendToDashboard(arena, op_json) catch |err| {
+    var program = try engine.generateProgram(module_definition, arena);
+    dashboard.sendToDashboard() catch |err| {
         if (err == error.ConnectionRefused) {
             std.debug.print("Connection to dashboard refused... Continuing without dashboard\n", .{});
         } else return err;
     };
-
     const module = try program.compile();
+
+    // MARK: POST COMPILATION
 
     if (dump_llvm == true) {
         std.debug.print("\n========= LLVM =========\n", .{});
@@ -207,15 +202,15 @@ fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!voi
 
 fn execute(module: types.LLVMModuleRef) !void {
     var error_msg: [*c]u8 = null;
-    var engine: types.LLVMExecutionEngineRef = undefined;
-    if (execution.LLVMCreateExecutionEngineForModule(&engine, module, &error_msg) != 0) {
+    var engine_ref: types.LLVMExecutionEngineRef = undefined;
+    if (execution.LLVMCreateExecutionEngineForModule(&engine_ref, module, &error_msg) != 0) {
         std.debug.print("Execution engine creation failed: {s}\n", .{error_msg});
         core.LLVMDisposeMessage(error_msg);
         @panic("failed to create exec engine");
     }
-    defer execution.LLVMDisposeExecutionEngine(engine);
+    defer execution.LLVMDisposeExecutionEngine(engine_ref);
 
-    const main_addr = execution.LLVMGetFunctionAddress(engine, "main");
+    const main_addr = execution.LLVMGetFunctionAddress(engine_ref, "main");
     const MainFn = fn () callconv(.C) f32;
     const main_fn: *const MainFn = @ptrFromInt(main_addr);
 

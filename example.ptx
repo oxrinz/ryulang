@@ -1,0 +1,31 @@
+.version 8.4
+.target sm_52
+.address_size 64
+.visible .entry main(
+.param .u64 %param_0,
+.param .u64 %param_1
+)
+{
+.reg .b64 %rd_<3>;
+.reg .f32 %f32_<5>;
+.reg .s32 %r_<3>;
+mov.u32 %r_0, %tid.x;
+mov.u32 %r_1, %tid.y;
+mov.u32 %r_2, %ctaid.x;
+mul.wide.u32 %rd_1, %r_2, 256;
+mad.wide.u32 %rd_1, %r_1, 16, %rd_1;
+add.u64 %rd_1, %rd_1, %r_0;
+ld.param.u64 %rd_2, [%param_1];
+setp.ge.u64 %p0, %rd_1, %rd_2;
+bra.uni %p0, end;
+ld.param.u64 %rd_0, [%param_0];
+shl.b64 %rd_2, %rd_1, 2;
+ld.global.f32 %f32_0, [%rd_0 + %rd_2];
+mov.f32 %f32_1, 2.000000e0;
+mov.f32 %f32_2, 4.000000e0;
+add.f32 %f32_3, %f32_0, %f32_1;
+add.f32 %f32_4, %f32_3, %f32_2;
+st.global.f32 %f32_4, [%rd_0 + %rd_2];
+end:
+ret;
+}

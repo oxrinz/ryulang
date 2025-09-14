@@ -83,18 +83,14 @@ pub const Parser = struct {
 
     fn parseExpression(self: *Parser, min_prec: i16) anyerror!*ast.Expression {
         var left = try self.parseFactor();
-
         while (self.cursor < self.tokens.len and
             tokens_script.is_binary_operator(self.curr().type) and
             self.precedence(self.curr()) >= min_prec)
         {
             const curr_prec = self.precedence(self.curr());
-
             const operator = self.parseBinop();
             self.cursor += 1;
-
             const right = try self.parseExpression(curr_prec + 1);
-
             const new_expr = try self.allocator.create(ast.Expression);
             new_expr.* = .{
                 .binary = .{
@@ -103,51 +99,37 @@ pub const Parser = struct {
                     .right = right,
                 },
             };
-
             left = new_expr;
         }
-
         return left;
     }
 
     fn parseFactor(self: *Parser) !*ast.Expression {
         var expr = try self.allocator.create(ast.Expression);
-
         switch (self.curr().type) {
-            // .STRING => {
-            //     expr.* = .{
-            //         .constant = .{
-            //             .data = self.curr().literal.?.string,
-            //         },
-            //     };
-            //     self.cursor += 1;
-            // },
             .NUMBER => {
                 const literal = self.curr().literal.?;
                 const dtype: rir.DType = switch (literal) {
-                    .integer => .i64,
-                    .float => .f64,
+                    .integer => .i32,
+                    .float => .f32,
                     else => unreachable,
                 };
-
                 const number: *anyopaque = switch (literal) {
                     .integer => blk: {
-                        const ptr = try self.allocator.create(i64);
-                        ptr.* = literal.integer;
+                        const ptr = try self.allocator.create(i32);
+                        ptr.* = @intCast(literal.integer);
                         break :blk @ptrCast(ptr);
                     },
                     .float => blk: {
-                        const ptr = try self.allocator.create(f64);
-                        ptr.* = literal.float;
+                        const ptr = try self.allocator.create(f32);
+                        ptr.* = @floatCast(literal.float);
                         break :blk @ptrCast(ptr);
                     },
                     else => unreachable,
                 };
-
                 const shape = try self.allocator.create([1]usize);
                 shape.* = [_]usize{1};
-
-                const constant = rir.Constant{
+                const constant = ast.Constant{
                     .ptr = number,
                     .shape = shape,
                     .dtype = dtype,
@@ -162,7 +144,6 @@ pub const Parser = struct {
                 const inner_expr = try self.parseExpression(0);
                 try self.expect(.RIGHT_PAREN);
                 self.cursor += 1;
-
                 expr = inner_expr;
             },
             .IDENTIFIER => {
@@ -194,42 +175,72 @@ pub const Parser = struct {
                     };
                 } else unreachable;
             },
-
-            // TODO: implement recursive arrays
             .LEFT_BRACKET => {
                 var value_array = std.ArrayList(u8).init(self.allocator);
+                var shape_array = std.ArrayList(usize).init(self.allocator);
                 self.cursor += 1;
 
+                if (self.curr().type == .RIGHT_BRACKET) {
+                    self.cursor += 1;
+                    try shape_array.append(0);
+                    const shape = try shape_array.toOwnedSlice();
+                    const data = try value_array.toOwnedSlice();
+                    const constant = ast.Constant{
+                        .ptr = data.ptr,
+                        .dtype = .f32,
+                        .shape = shape,
+                    };
+                    expr.* = .{ .constant = constant };
+                    return expr;
+                }
+
+                var dtype: rir.DType = undefined;
+                var nested_shape: ?[]const usize = null;
+                var count: usize = 0;
+
                 var result = try self.parseFactor();
-                if (result.* != .constant) unreachable;
-                const dtype = result.*.constant.dtype;
+                switch (result.*) {
+                    .constant => |constant| {
+                        dtype = constant.dtype;
+                        try value_array.appendSlice(constant.asBytes());
+                        nested_shape = constant.shape;
+                    },
+                    else => unreachable,
+                }
+                count += 1;
+                try shape_array.append(1);
 
-                try value_array.appendSlice(result.*.constant.asBytes());
-
-                var count: usize = 1;
                 while (self.curr().type != .RIGHT_BRACKET) {
                     try self.expect(.COMMA);
                     self.cursor += 1;
                     result = try self.parseFactor();
-                    if (result.* != .constant or result.*.constant.dtype != dtype) unreachable;
-                    try value_array.appendSlice(result.*.constant.asBytes());
-                    count += 1;
+                    switch (result.*) {
+                        .constant => |constant| {
+                            if (constant.dtype != dtype) unreachable;
+                            if (nested_shape) |ns| {
+                                if (!std.mem.eql(usize, ns, constant.shape)) unreachable;
+                            } else {
+                                nested_shape = constant.shape;
+                            }
+                            try value_array.appendSlice(constant.asBytes());
+                            count += 1;
+                        },
+                        else => unreachable,
+                    }
                 }
                 self.cursor += 1;
 
+                try shape_array.appendSlice(nested_shape orelse &[_]usize{});
+                shape_array.items[0] = count;
+
                 const data = try value_array.toOwnedSlice();
-                const shape = try self.allocator.alloc(usize, 1);
-                shape[0] = count;
-                const constant = rir.Constant{
-                    .ptr = @constCast(@ptrCast(data.ptr)),
+                const shape = try shape_array.toOwnedSlice();
+                const constant = ast.Constant{
+                    .ptr = data.ptr,
                     .dtype = dtype,
                     .shape = shape,
                 };
-
-                expr.* = .{
-                    .constant = constant,
-                };
-
+                expr.* = .{ .constant = constant };
                 return expr;
             },
             else => {
@@ -241,7 +252,6 @@ pub const Parser = struct {
                 return error.SyntaxError;
             },
         }
-
         return expr;
     }
 
@@ -252,13 +262,11 @@ pub const Parser = struct {
             .STAR => return .Multiply,
             .SLASH => return .Divide,
             .PERCENTAGE => return .Remainder,
-
             .AMPERSAND => return .Bitwise_AND,
             .PIPE => return .Bitwise_OR,
             .CARET => return .Bitwise_XOR,
             .LEFT_SHIFT => return .Left_Shift,
             .RIGHT_SHIFT => return .Right_Shift,
-
             .LESS => return .Less,
             .LESS_EQUAL => return .Less_Or_Equal,
             .GREATER => return .Greater,
@@ -277,18 +285,14 @@ pub const Parser = struct {
             return &[_]*ast.Expression{};
         }
         var param_list = std.ArrayList(*ast.Expression).init(self.allocator);
-
         try param_list.append(try self.parseExpression(0));
-
         while (self.curr().type != .RIGHT_PAREN) {
             try self.expect(.COMMA);
             self.cursor += 1;
             try param_list.append(try self.parseExpression(0));
         }
-
         try self.expect(.RIGHT_PAREN);
         self.cursor += 1;
-
         return try param_list.toOwnedSlice();
     }
 

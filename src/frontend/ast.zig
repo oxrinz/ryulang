@@ -53,8 +53,31 @@ pub const BuiltinCall = struct {
     args: []*Expression,
 };
 
+pub const Constant = struct {
+    ptr: *anyopaque,
+    shape: []const usize,
+    dtype: rir.DType,
+
+    pub fn asBytes(self: @This()) []const u8 {
+        const ptr_as_bytes: [*]const u8 = @ptrCast(self.ptr);
+        return ptr_as_bytes[0..self.getSizeInBytes()];
+    }
+
+    pub fn getSizeInBytes(self: @This()) usize {
+        return self.getSize() * self.dtype.getSizeInBytes();
+    }
+
+    pub fn getSize(self: @This()) usize {
+        var size: usize = 1;
+        for (self.shape) |dim| {
+            size *= dim;
+        }
+        return size;
+    }
+};
+
 pub const Expression = union(enum) {
-    constant: rir.Constant,
+    constant: Constant,
     binary: Binary,
     variable: Variable,
     call: Call,

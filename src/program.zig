@@ -10,10 +10,8 @@ const execution = rllvm.llvm.engine;
 const debug = rllvm.llvm.debug;
 
 const rir = @import("rir/rir.zig");
-
 const nvidia = @import("backends/nvidia.zig");
-
-const linearize = @import("engine/linearize.zig").linealize;
+const dashboard = @import("dashboard.zig");
 
 pub const Effect = struct {
     effect_type: enum { print },
@@ -24,6 +22,7 @@ pub const Program = struct {
     graph: []*rir.RIROP,
     effects: []Effect,
 
+    // codegen function, no optimization passes beyond this point
     pub fn compile(self: *Program) !types.LLVMModuleRef {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         const allocator = arena.allocator();
@@ -47,19 +46,11 @@ pub const Program = struct {
         defer core.LLVMDisposeBuilder(builder);
         core.LLVMPositionBuilderAtEnd(builder, entry);
 
-        // construct ptx
+        //construct ptx
         var ptx_constructor = nvidia.PTXConstructor.init(module, builder);
 
         for (self.effects) |effect| {
-            var params = std.ArrayList(*rir.RIROP).init(allocator);
-            for (effect.targets) |op| {
-                try params.appendSlice(op.findInputs(allocator));
-                try params.append(op);
-            }
-
-            const kernel = try linearize(params.items, allocator);
-
-            const d_results = try ptx_constructor.compileKernel(kernel);
+            const d_results = try ptx_constructor.compileKernel(effect.targets[0]);
 
             const result = try ptx_constructor.copyToH(d_results[0], 4);
 

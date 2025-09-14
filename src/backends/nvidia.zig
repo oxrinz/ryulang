@@ -39,16 +39,21 @@ pub const PTXConstructor = struct {
         };
     }
 
-    pub fn compileKernel(self: *@This(), kernel: rir.Sequential) ![]types.LLVMValueRef {
-        const metadata = try calculateMetadata(kernel);
+    pub fn compileKernel(self: *@This(), kernel_op: *rir.RIROP) ![]types.LLVMValueRef {
+        // TODO: remove this check
+        if (kernel_op.* != .kernel) return error.NotAKernelOp;
+        const kernel = kernel_op.kernel.ops;
+
+        std.debug.print("kernel: {any}\n", .{kernel_op.kernel.ops});
+
+        const ptx = try buildKernel(kernel);
+        const metadata = try calculateMetadata(kernel_op.kernel.params);
 
         var d_params = std.ArrayList(types.LLVMValueRef).init(arena.allocator());
-
         const d_output = try self.alloc(4);
         try d_params.append(d_output);
 
         // launch kernel
-        const ptx = try buildKernel(kernel);
         const kernel_len = ptx.len;
         const global_ptx_str = core.LLVMAddGlobal(self.module, core.LLVMArrayType(core.LLVMInt8Type(), @intCast(kernel_len)), "ptx_str");
         const kernel_constant = core.LLVMConstString(@ptrCast(ptx), @intCast(kernel_len), 1);
@@ -58,12 +63,12 @@ pub const PTXConstructor = struct {
         const cuda_function = try cuda.moduleGetFunction(self.module, self.builder, cuda_module);
 
         const int_type = core.LLVMInt32Type();
-        const grid_dim_x = core.LLVMConstInt(int_type, 1, 0);
-        const grid_dim_y = core.LLVMConstInt(int_type, 1, 0);
-        const grid_dim_z = core.LLVMConstInt(int_type, 1, 0);
+        const grid_dim_x = metadata.dims.grid.x;
+        const grid_dim_y = metadata.dims.grid.y;
+        const grid_dim_z = metadata.dims.grid.z;
         const block_dim_x = metadata.dims.block.x;
         const block_dim_y = metadata.dims.block.y;
-        const block_dim_z = core.LLVMConstInt(int_type, 1, 0);
+        const block_dim_z = metadata.dims.block.z;
         const shared_mem_bytes = core.LLVMConstInt(int_type, 0, 0);
         try cuda.launchKernel(
             self.module,
@@ -98,8 +103,14 @@ pub const PTXConstructor = struct {
 };
 
 const KernelData = struct {
+    params: []usize,
     dims: struct {
         block: struct {
+            x: types.LLVMValueRef,
+            y: types.LLVMValueRef,
+            z: types.LLVMValueRef,
+        },
+        grid: struct {
             x: types.LLVMValueRef,
             y: types.LLVMValueRef,
             z: types.LLVMValueRef,
@@ -108,236 +119,205 @@ const KernelData = struct {
 };
 
 fn calculateMetadata(ops: []*rir.RIROP) !KernelData {
-    const shape = ops[0].*.getShape();
+    var params = std.ArrayList(usize).init(arena.allocator());
 
+    for (ops) |op| {
+        switch (op.*) {
+            .buffer => |buffer| try params.append(buffer.getSizeInBytes()),
+            .store => |store| try params.append(store.source.getSizeInBytes(arena.allocator())),
+            else => {},
+        }
+    }
+
+    const shape = ops[0].*.getShape();
     const int_type = core.LLVMInt32Type();
+
+    var total_elements: u64 = 1;
+    for (shape) |dim| {
+        total_elements *= dim;
+    }
+
+    const block_size_x = 16;
+    const block_size_y = 16;
+    const threads_per_block = block_size_x * block_size_y;
+
+    const grid_x = (total_elements + threads_per_block - 1) / threads_per_block;
+
     return .{
+        .params = try params.toOwnedSlice(),
         .dims = .{
             .block = .{
-                .x = core.LLVMConstInt(int_type, shape[0], 0),
-                .y = core.LLVMConstInt(int_type, if (shape.len > 1) shape[1] else 1, 0),
+                .x = core.LLVMConstInt(int_type, block_size_x, 0),
+                .y = core.LLVMConstInt(int_type, block_size_y, 0),
+                .z = core.LLVMConstInt(int_type, 1, 0),
+            },
+            .grid = .{
+                .x = core.LLVMConstInt(int_type, @min(grid_x, 2147483647), 0), // respect sm_52 x-limit TODO: remove
+                .y = core.LLVMConstInt(int_type, 1, 0),
                 .z = core.LLVMConstInt(int_type, 1, 0),
             },
         },
     };
 }
 
-const RegisterManager = struct {
-    allocator: Allocator,
-    f32_count: usize = 0,
-    f64_count: usize = 0,
-    i64_count: usize = 0,
-    b64_count: usize = 0,
-    param_count: usize = 0,
+fn buildKernel(kernel_ops: []*rir.RIROP) ![]const u8 {
+    const KernelBuilder = struct {
+        allocator: std.mem.Allocator,
+        register_manager: RegisterManager,
+        ops: []*rir.RIROP,
+        instructions: std.ArrayList(ptxast.Instruction),
+        params: std.ArrayList([]const u8),
+        dest_map: std.AutoHashMap(*rir.RIROP, []const u8),
 
-    pub fn init(allocator: Allocator) @This() {
-        return .{ .allocator = allocator };
-    }
-
-    pub fn getRegister(self: *RegisterManager, dtype: enum { f32, b64 }) ![]const u8 {
-        switch (dtype) {
-            .f32 => {
-                self.f32_count += 1;
-                return try std.fmt.allocPrint(self.allocator, "%f32_{d}", .{self.f32_count - 1});
-            },
-            .b64 => {
-                self.b64_count += 1;
-                return try std.fmt.allocPrint(self.allocator, "%rd_{d}", .{self.b64_count - 1});
-            },
+        fn init(ops: []*rir.RIROP, allocator: std.mem.Allocator) !@This() {
+            return .{
+                .allocator = allocator,
+                .register_manager = RegisterManager.init(allocator),
+                .ops = ops,
+                .instructions = std.ArrayList(ptxast.Instruction).init(allocator),
+                .params = std.ArrayList([]const u8).init(allocator),
+                .dest_map = std.AutoHashMap(*rir.RIROP, []const u8).init(allocator),
+            };
         }
-    }
 
-    pub fn generateDirectives(self: *RegisterManager) ![]ptxast.Directive {
-        var list = std.ArrayList(ptxast.Directive).init(self.allocator);
-        try list.appendSlice(&[_]ptxast.Directive{
-            .{ .reg = .{ .name = "%rd_", .count = @intCast(self.b64_count), .type = .b64 } },
-            .{ .reg = .{ .name = "%f32_", .count = @intCast(self.f32_count), .type = .f32 } },
-        });
-        return list.toOwnedSlice();
-    }
+        const RegisterManager = struct {
+            allocator: Allocator,
+            f32_count: usize = 0,
+            f64_count: usize = 0,
+            i64_count: usize = 0,
+            b64_count: usize = 0,
+            u32_count: usize = 0,
+            param_count: usize = 0,
 
-    pub fn getParam(self: *RegisterManager) ![]const u8 {
-        self.param_count += 1;
-        return try std.fmt.allocPrint(self.allocator, "%param_{d}", .{self.param_count - 1});
-    }
-};
+            pub fn init(allocator: Allocator) @This() {
+                return .{ .allocator = allocator };
+            }
 
-fn buildKernel(kernel_ops: rir.Sequential) ![]const u8 {
-    const allocator = arena.allocator();
-
-    const appendInstr = struct {
-        fn perform(fmt: []const u8, args: anytype) anyerror![]u8 {
-            return try std.fmt.allocPrint(allocator, fmt, args);
-        }
-    }.perform;
-    _ = appendInstr;
-
-    var register_manager = RegisterManager.init(allocator);
-
-    var instructions = std.ArrayList(ptxast.Instruction).init(allocator);
-    var params = std.ArrayList([]const u8).init(allocator);
-
-    var dest_map = std.AutoHashMap(*rir.RIROP, []const u8).init(allocator);
-
-    for (kernel_ops) |op| {
-        switch (op.*) {
-            .add => |add| {
-                const a = dest_map.get(add.a);
-                const b = dest_map.get(add.b);
-
-                const dest = try register_manager.getRegister(.f32);
-
-                try instructions.append(.{
-                    .add = .{
-                        .src1 = .{ .register = a.? },
-                        .src2 = .{ .register = b.? },
-                        .dest = .{ .register = dest },
-                        .type = .f32,
-                        .wide = false,
+            pub fn getRegister(self: *RegisterManager, dtype: enum { f32, b64, u32 }) ![]const u8 {
+                switch (dtype) {
+                    .f32 => {
+                        self.f32_count += 1;
+                        return try std.fmt.allocPrint(self.allocator, "%f32_{d}", .{self.f32_count - 1});
                     },
-                });
-
-                try dest_map.put(op, dest);
-            },
-            .divide => {},
-            .constant => {
-                const dest = try register_manager.getRegister(.f32);
-                const src = op.constant.getConstant();
-                if (src != .f32) @panic("Wrong datatype");
-                try instructions.append(.{ .mov = .{
-                    .src = .{ .immediate = .{ .float = @floatCast(src.f32[0]) } },
-                    .dest = .{ .register = dest },
-                    .type = .f32,
-                } });
-                try dest_map.put(op, dest);
-            },
-            .sequential => @panic("Nested sequential"),
-
-            // TODO: currently store assumes that the stored value is an output. fix this
-            .store => |store| {
-                const output_param = try register_manager.getParam();
-                const output_reg = try register_manager.getRegister(.b64);
-                try params.append(output_param);
-                try instructions.append(.{ .ld = .{ .space = .param, .type = .u64, .src = .{ .parameter = output_param }, .dest = .{ .register = output_reg } } });
-
-                try instructions.append(.{
-                    .st = .{
-                        .space = .global,
-                        .type = .f32,
-                        .dest = .{ .register = output_reg },
-                        .src = .{ .register = dest_map.get(store.source).? },
+                    .b64 => {
+                        self.b64_count += 1;
+                        return try std.fmt.allocPrint(self.allocator, "%rd_{d}", .{self.b64_count - 1});
                     },
+                    .u32 => {
+                        self.u32_count += 1;
+                        return try std.fmt.allocPrint(self.allocator, "%r_{d}", .{self.u32_count - 1});
+                    },
+                }
+            }
+
+            pub fn generateDirectives(self: *RegisterManager) ![]ptxast.Directive {
+                var list = std.ArrayList(ptxast.Directive).init(self.allocator);
+                try list.appendSlice(&[_]ptxast.Directive{
+                    .{ .reg = .{ .name = "%rd_", .count = @intCast(self.b64_count), .type = .b64 } },
+                    .{ .reg = .{ .name = "%f32_", .count = @intCast(self.f32_count), .type = .f32 } },
+                    .{ .reg = .{ .name = "%r_", .count = @intCast(self.u32_count), .type = .u32 } },
                 });
-            },
-            .copy => {},
+                return list.toOwnedSlice();
+            }
+
+            pub fn getParam(self: *RegisterManager) ![]const u8 {
+                self.param_count += 1;
+                return try std.fmt.allocPrint(self.allocator, "%param_{d}", .{self.param_count - 1});
+            }
+        };
+
+        fn build(self: *@This()) ![]const u8 {
+            for (self.ops) |op| {
+                switch (op.*) {
+                    .add => |add| {
+                        const a = self.dest_map.get(add.a) orelse {
+                            std.debug.panic("Missing operand: {any}\n", .{add.a});
+                        };
+                        const b = self.dest_map.get(add.b) orelse {
+                            std.debug.panic("Missing operand: {any}\n", .{add.b});
+                        };
+                        const dest = try self.register_manager.getRegister(.f32);
+                        try self.instructions.append(.{
+                            .add = .{
+                                .src1 = .{ .register = a },
+                                .src2 = .{ .register = b },
+                                .dest = .{ .register = dest },
+                                .type = .f32,
+                                .wide = false,
+                            },
+                        });
+                        try self.dest_map.put(op, dest);
+                    },
+                    .divide => {},
+                    .kernel => @panic("Nested Kernel"),
+                    .store => |store| {
+                        const output_param = try self.register_manager.getParam();
+                        const output_reg = try self.register_manager.getRegister(.b64);
+                        try self.params.append(output_param);
+                        try self.instructions.append(.{
+                            .ld = .{
+                                .space = .param,
+                                .type = .u64,
+                                .src = .{ .parameter = output_param },
+                                .dest = .{ .register = output_reg },
+                            },
+                        });
+                        try self.instructions.append(.{
+                            .add = .{
+                                .src1 = .{ .register = output_reg },
+                                .src2 = .{ .register = "%rd_2" },
+                                .dest = .{ .register = "%rd_4" },
+                                .type = .b64,
+                                .wide = false,
+                            },
+                        });
+                        try self.instructions.append(.{
+                            .st = .{
+                                .space = .global,
+                                .type = .f32,
+                                .dest = .{ .register = "%rd_4" },
+                                .src = .{ .register = self.dest_map.get(store.source) orelse @panic("Missing store source") },
+                            },
+                        });
+                    },
+                    .param_addr => {
+                        const dest = try self.register_manager.getRegister(.u32);
+                        try self.instructions.append(.{
+                            .mov = .{
+                                .dest = .{ .register = dest },
+                                .src = .{ .register = "%tid.x" },
+                                .type = .u32,
+                            },
+                        });
+                        try self.dest_map.put(op, dest);
+                    },
+                    else => {
+                        std.debug.print("Unsupported op: {any}\n", .{op});
+                    },
+                }
+            }
+
+            try self.instructions.append(.{ .label = .{ .name = "end" } });
+            try self.instructions.append(.{ .ret = {} });
+
+            const directives = try self.register_manager.generateDirectives();
+
+            const kernel = ptxast.Kernel{
+                .name = "main",
+                .body = try self.instructions.toOwnedSlice(),
+                .directives = directives,
+                .params = try self.params.toOwnedSlice(),
+            };
+            const globals = &[_]ptxast.GlobalDecl{};
+            var kernels = [_]ptxast.Kernel{kernel};
+            const ast = ptxast.PTXAst{ .allocator = self.allocator, .globals = globals, .kernels = &kernels };
+
+            const ptx = try @import("nvidia/emission.zig").emit(self.allocator, ast);
+            return ptx;
         }
-    }
-
-    try instructions.append(.ret);
-
-    const kernel = ptxast.Kernel{
-        .name = "main",
-        .body = try instructions.toOwnedSlice(),
-        .directives = try register_manager.generateDirectives(),
-        .params = try params.toOwnedSlice(),
     };
 
-    const globals = &[_]ptxast.GlobalDecl{};
-    var kernels = [_]ptxast.Kernel{kernel};
-    const ast = ptxast.PTXAst{ .allocator = allocator, .globals = globals, .kernels = &kernels };
-    const ptx = try @import("nvidia/emission.zig").emit(allocator, ast);
+    var kernel_builder = try KernelBuilder.init(kernel_ops, arena.allocator());
 
-    return ptx;
+    return try kernel_builder.build();
 }
-
-// fn buildKernel(kernel: rir.Sequential) ![]const u8 {
-//     const allocator = arena.allocator();
-
-//     const appendInstr = struct {
-//         fn perform(fmt: []const u8, args: anytype) anyerror![]u8 {
-//             return try std.fmt.allocPrint(allocator, fmt, args);
-//         }
-//     }.perform;
-//     _ = appendInstr;
-
-//     var instructions = std.ArrayList(ptxast.Instruction).init(allocator);
-//     var directives = std.ArrayList(ptxast.Directive).init(allocator);
-//     var params = std.ArrayList([]const u8).init(allocator);
-
-//     const total_params = input_count + 1;
-//     const reg_count = total_params + 1;
-
-//     try directives.append(.{
-//         .reg = .{
-//             .name = "%rd",
-//             .count = @intCast(reg_count),
-//             .type = .b64,
-//         },
-//     });
-
-//     try directives.append(.{
-//         .reg = .{
-//             .name = "%f",
-//             .count = @intCast(reg_count),
-//             .type = .f32,
-//         },
-//     });
-
-//     for (0..total_params) |i| {
-//         const param_name = try std.fmt.allocPrint(allocator, "param_{d}", .{i});
-//         const rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{i});
-
-//         try params.append(param_name);
-//         try instructions.append(.{ .ld = .{ .space = .param, .type = .u64, .src = .{ .parameter = param_name }, .dest = .{ .register = rd_reg } } });
-//     }
-
-//     for (0..total_params) |i| {
-//         const rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{i});
-//         try instructions.append(.{ .cvta = .{ .to_generic = true, .space = .global, .type = .u64, .src = .{ .register = rd_reg }, .dest = .{ .register = rd_reg } } });
-//     }
-
-//     for (0..input_count) |i| {
-//         const rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{i});
-//         const f_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{i});
-
-//         try instructions.append(.{ .ld = .{ .space = .global, .type = .f32, .src = .{ .register = rd_reg }, .dest = .{ .register = f_reg } } });
-//     }
-
-//     const result_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{input_count});
-//     if (input_count == 1) {
-//         const f0_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{0});
-//         try instructions.append(.{ .mov = .{ .type = .f32, .src = .{ .register = f0_reg }, .dest = .{ .register = result_reg } } });
-//     } else if (input_count == 2) {
-//         const f0_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{0});
-//         const f1_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{1});
-//         try instructions.append(.{ .add = .{ .type = .f32, .src1 = .{ .register = f0_reg }, .src2 = .{ .register = f1_reg }, .dest = .{ .register = result_reg } } });
-//     } else {
-//         var current_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{0});
-//         for (1..input_count) |i| {
-//             const next_input_reg = try std.fmt.allocPrint(allocator, "%f{d}", .{i});
-//             const temp_reg = if (i == input_count - 1) result_reg else try std.fmt.allocPrint(allocator, "%f{d}", .{input_count + i});
-
-//             try instructions.append(.{ .add = .{ .type = .f32, .src1 = .{ .register = current_reg }, .src2 = .{ .register = next_input_reg }, .dest = .{ .register = temp_reg } } });
-//             current_reg = temp_reg;
-//         }
-//     }
-
-//     const output_rd_reg = try std.fmt.allocPrint(allocator, "%rd{d}", .{input_count});
-//     try instructions.append(.{ .st = .{ .space = .global, .type = .f32, .dest = .{ .register = output_rd_reg }, .src = .{ .register = result_reg } } });
-
-//     try instructions.append(.ret);
-
-//     const kernel = ptxast.Kernel{
-//         .name = "main",
-//         .body = try instructions.toOwnedSlice(),
-//         .directives = try directives.toOwnedSlice(),
-//         .params = try params.toOwnedSlice(),
-//     };
-
-//     const globals = &[_]ptxast.GlobalDecl{};
-//     var kernels = [_]ptxast.Kernel{kernel};
-//     const ast = ptxast.PTXAst{ .allocator = allocator, .globals = globals, .kernels = &kernels };
-//     const ptx = try @import("nvidia/emission.zig").emit(allocator, ast);
-
-//     return ptx;
-// }

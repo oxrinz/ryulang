@@ -72,10 +72,39 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
                         else => unreachable,
                     }
                 },
+                // TODO: cast to the correct default dtype
                 .constant => |constant| {
-                    // TODO: cast to the correct default dtype
-                    const new_constant = try constant.convertTo(.f32, self.allocator);
-                    result.* = .{ .constant = new_constant };
+                    var size: usize = 1;
+                    for (constant.shape) |dim| {
+                        size *= dim;
+                    }
+                    const float_array = @as([*]f32, @alignCast(@ptrCast(constant.ptr)))[0..size];
+                    var llvm_vals = try self.allocator.alloc(types.LLVMValueRef, size);
+                    defer self.allocator.free(llvm_vals);
+
+                    for (float_array, 0..) |val, i| {
+                        llvm_vals[i] = core.LLVMConstReal(core.LLVMFloatType(), val);
+                    }
+                    const array = core.LLVMConstArray(core.LLVMFloatType(), llvm_vals.ptr, @intCast(size));
+                    const buffer = try self.allocator.create(rir.RIROP);
+                    buffer.* = .{
+                        .buffer = .{
+                            .device = .host,
+                            .dtype = constant.dtype,
+                            .ref = array,
+                            .size = size,
+                        },
+                    };
+
+                    const view = try self.allocator.create(rir.RIROP);
+                    view.* = .{
+                        .view = .{
+                            .shape = constant.shape,
+                            .src = buffer,
+                        },
+                    };
+
+                    result.* = view.*;
                 },
                 .call => |call| {
                     _ = call;
@@ -93,28 +122,21 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
 
                         const ops = try operands.toOwnedSlice();
 
-                        const store_op = try self.allocator.create(rir.RIROP);
-                        store_op.* = .{ .store = .{ .source = ops[0] } };
-                        var targets = std.ArrayList(*rir.RIROP).init(self.allocator);
-                        try targets.appendSlice(ops);
-                        try targets.append(store_op);
-
                         const effect = program.Effect{
                             .effect_type = .print,
-                            .targets = try targets.toOwnedSlice(),
+                            .targets = ops,
                         };
 
                         try self.effects.append(effect);
 
                         return ops[0];
                     } else if (std.mem.eql(u8, builtin_call.identifier, "Tensor")) {
-                        const constant = try self.generateExpression(builtin_call.args[0].*);
-                        result.* = .{
-                            .constant = constant.?.constant,
-                        };
+                        const copy = try self.generateExpression(builtin_call.args[0].*);
+                        result.* = copy.?.*;
                     } else unreachable;
                 },
                 .variable => |variable| {
+                    std.debug.print("VAR: {any}\n", .{variable.identifier});
                     return self.variables.get(variable.identifier).?;
                 },
             }
@@ -128,6 +150,7 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
         switch (stmt) {
             .assign => |assign| {
                 const value = try genFns.generateExpression(assign.value);
+
                 try variables.put(assign.target, value.?);
                 try collectUsedVariables(assign.value, &used);
             },

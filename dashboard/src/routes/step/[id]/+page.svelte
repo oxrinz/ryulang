@@ -22,7 +22,7 @@
             id: "root",
             children: nodes.map((node) => ({
                 id: node.id,
-                width: 250,
+                width: 350,
                 height: 50,
             })),
             edges: edges.map((edge) => ({
@@ -37,7 +37,7 @@
                 layoutOptions: {
                     "elk.algorithm": "layered",
                     "elk.direction": "LEFT",
-                    "elk.spacing.nodeNode": "120",
+                    "elk.spacing.nodeNode": "140",
                 },
             });
 
