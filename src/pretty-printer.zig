@@ -5,25 +5,32 @@ const ast = @import("frontend/ast.zig");
 pub fn prettyPrintModule(allocator: Allocator, writer: anytype, module: *const ast.Module, indent: usize) !void {
     try writer.writeAll("Module {\n");
     try prettyPrintBlock(allocator, writer, &module.block, indent + 2);
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("}\n");
 }
 
 pub fn prettyPrintBlock(allocator: Allocator, writer: anytype, block: *const ast.Block, indent: usize) anyerror!void {
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("Block {\n");
 
     for (block.items) |statement| {
         try prettyPrintStatement(allocator, writer, statement, indent + 2);
     }
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("}\n");
 }
 
 pub fn prettyPrintStatement(allocator: Allocator, writer: anytype, statement: ast.Statement, indent: usize) !void {
-    try writer.writeByteNTimes(' ', indent);
-
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     switch (statement) {
         .expr => |expr| {
             try writer.writeAll("Statement.expr:\n");
@@ -45,37 +52,53 @@ pub fn prettyPrintStatement(allocator: Allocator, writer: anytype, statement: as
 }
 
 pub fn prettyPrintFunctionDefinition(allocator: Allocator, writer: anytype, func: ast.FunctionDefinition, indent: usize) !void {
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.print("FunctionDefinition.identifier: {s}\n", .{func.identifier});
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.print("FunctionDefinition.returns: {any}\n", .{func.returns});
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("FunctionDefinition.args:\n");
 
     for (func.args, 0..) |arg, i| {
-        try writer.writeByteNTimes(' ', indent + 2);
+        for (0..indent + 2) |_| {
+            try writer.writeByte(' ');
+        }
         try writer.print("Arg[{}]:\n", .{i});
         try prettyPrintExpression(allocator, writer, arg.*, indent + 4);
     }
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("FunctionDefinition.body:\n");
     try prettyPrintBlock(allocator, writer, &func.body, indent + 2);
 }
 
 pub fn prettyPrintAssign(allocator: Allocator, writer: anytype, assign: ast.Assign, indent: usize) !void {
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.print("Assign.target: {s}\n", .{assign.target});
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("Assign.value:\n");
     try prettyPrintExpression(allocator, writer, assign.value, indent + 2);
 }
 
 pub fn prettyPrintExpression(allocator: Allocator, writer: anytype, expression: ast.Expression, indent: usize) anyerror!void {
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
 
     switch (expression) {
         .constant => |constant| {
@@ -130,53 +153,74 @@ pub fn prettyPrintBinary(allocator: Allocator, writer: anytype, binary: ast.Bina
 
     const op_type = @tagName(binary.operator.getType());
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.print("Binary.operator: {s} (Type: {s})\n", .{ op_str, op_type });
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("Binary.left:\n");
     try prettyPrintExpression(allocator, writer, binary.left.*, indent + 2);
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("Binary.right:\n");
     try prettyPrintExpression(allocator, writer, binary.right.*, indent + 2);
 }
 
 pub fn prettyPrintCall(allocator: Allocator, writer: anytype, call: ast.Call, indent: usize) !void {
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.print("Call.identifier: {s}\n", .{call.identifier});
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("Call.args:\n");
 
     for (call.args, 0..) |arg, i| {
-        try writer.writeByteNTimes(' ', indent + 2);
+        for (0..indent + 2) |_| {
+            try writer.writeByte(' ');
+        }
         try writer.print("Arg[{}]:\n", .{i});
         try prettyPrintExpression(allocator, writer, arg.*, indent + 4);
     }
 }
 
 pub fn prettyPrintBuiltinCall(allocator: Allocator, writer: anytype, call: ast.BuiltinCall, indent: usize) !void {
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.print("BuiltinCall.identifier: {s}\n", .{call.identifier});
 
-    try writer.writeByteNTimes(' ', indent);
+    for (0..indent) |_| {
+        try writer.writeByte(' ');
+    }
     try writer.writeAll("BuiltinCall.args:\n");
 
     for (call.args, 0..) |arg, i| {
-        try writer.writeByteNTimes(' ', indent + 2);
+        for (0..indent + 2) |_| {
+            try writer.writeByte(' ');
+        }
         try writer.print("Arg[{}]:\n", .{i});
         try prettyPrintExpression(allocator, writer, arg.*, indent + 4);
     }
 }
 
 pub fn printAst(allocator: Allocator, module: *const ast.Module) anyerror!void {
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
     try prettyPrintModule(allocator, stdout, module, 0);
+    try stdout.flush();
 }
 
 pub fn astToString(allocator: Allocator, module: *const ast.Module) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
+    var list = std.array_list.Managed(u8).init(allocator);
     errdefer list.deinit();
 
     const writer = list.writer();

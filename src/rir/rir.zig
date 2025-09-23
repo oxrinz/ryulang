@@ -12,37 +12,15 @@ const types = rllvm.llvm.types;
 const core = rllvm.llvm.core;
 const execution = rllvm.llvm.engine;
 const debug = rllvm.llvm.debug;
+const kir = @import("./kernel-ir.zig");
+const DType = @import("./dtype.zig").DType;
 
-pub const Device = union(enum) { host, device: usize };
-
-pub const DType = enum {
-    i32,
-    i64,
-    f32,
-    f64,
-    usize,
-
-    pub fn getSizeInBytes(self: DType) usize {
-        return switch (self) {
-            .f32, .i32 => 4,
-            .f64, .i64 => 8,
-            .usize => 8,
-        };
-    }
-
-    pub fn toType(self: DType) type {
-        return switch (self) {
-            .i32 => i32,
-            .i64 => i64,
-            .f32 => f32,
-            .f64 => f64,
-            .usize => usize,
-        };
-    }
+pub const Device = union(enum) {
+    host: ?types.LLVMValueRef,
+    device: usize,
 };
 
 pub const Buffer = struct {
-    ref: types.LLVMValueRef,
     device: Device,
     dtype: DType,
     size: usize,
@@ -72,17 +50,8 @@ pub const RIROP = union(enum) {
     buffer: Buffer,
     view: struct { shape: []const usize, src: *RIROP },
 
-    position: union(enum) {
-        local: enum { x, y, z },
-        global: enum { x, y, z },
-    },
-
-    // need better names for these.
-    // kernel is the finalized, linearized kernel that can be directly translated into backends
-    // draft_kernel is simply a wrapper for grouping. it will be later transformed into a kernel
-    draft_kernel: struct { ops: []*RIROP, params: []*RIROP },
-    kernel: struct { ops: []*RIROP, dims: KernelDims, params: []*RIROP },
-    param_addr,
+    graph_kernel: kir.GraphKernel,
+    linear_kernel: kir.LinearKernel,
 
     // bad, you have to load every single node to get the shape, TODO: figure out better way
     pub fn getShape(self: RIROP) []const usize {
@@ -91,7 +60,19 @@ pub const RIROP = union(enum) {
             .copy => |copy| copy.src.getShape(),
             .store => |store| store.source.getShape(),
             .view => |view| view.shape,
-            else => unreachable,
+            else => std.debug.panic("can't get shape through op: {any}\n", .{self}),
+        };
+    }
+
+    // same thing here
+    pub fn getDType(self: *RIROP) DType {
+        return switch (self.*) {
+            .add => |add| add.a.getDType(),
+            .copy => |copy| copy.src.getDType(),
+            .store => |store| store.source.getDType(),
+            .view => |view| view.src.getDType(),
+            .buffer => |buffer| buffer.dtype,
+            else => std.debug.panic("can't get dtype through op: {any}\n", .{self}),
         };
     }
 
@@ -105,7 +86,7 @@ pub const RIROP = union(enum) {
             .add => {
                 const a_inputs = self.add.a.findInputs(allocator);
                 const b_inputs = self.add.b.findInputs(allocator);
-                var result = std.ArrayList(*RIROP).init(allocator);
+                var result = std.array_list.Managed(*RIROP).init(allocator);
                 result.appendSlice(a_inputs) catch unreachable;
                 result.appendSlice(b_inputs) catch unreachable;
                 return result.toOwnedSlice() catch unreachable;
@@ -118,7 +99,10 @@ pub const RIROP = union(enum) {
             .store => |store| {
                 return store.source.findInputs(allocator);
             },
-            else => unreachable,
+            .view => |view| {
+                return view.src.findInputs(allocator);
+            },
+            else => std.debug.panic("can't find input through op: {any}\n", .{self.*}),
         };
     }
 
@@ -163,37 +147,11 @@ pub const RIROP = union(enum) {
                 const shape_clone = try allocator.dupe(usize, view.shape);
                 cloned.* = RIROP{ .view = .{ .shape = shape_clone, .src = src_clone } };
             },
-            .position => |pos| {
-                cloned.* = RIROP{ .position = pos };
+            .graph_kernel => |gk| {
+                cloned.* = RIROP{ .graph_kernel = gk };
             },
-            .draft_kernel => |draft| {
-                const ops_clone = try allocator.alloc(*RIROP, draft.ops.len);
-                for (draft.ops, 0..) |op, i| {
-                    ops_clone[i] = try op.cloneWithRefs(allocator, clone_map);
-                }
-
-                const params_clone = try allocator.alloc(*RIROP, draft.params.len);
-                for (draft.params, 0..) |param, i| {
-                    params_clone[i] = try param.cloneWithRefs(allocator, clone_map);
-                }
-
-                cloned.* = RIROP{ .draft_kernel = .{ .ops = ops_clone, .params = params_clone } };
-            },
-            .kernel => |kernel| {
-                const ops_clone = try allocator.alloc(*RIROP, kernel.ops.len);
-                for (kernel.ops, 0..) |op, i| {
-                    ops_clone[i] = try op.cloneWithRefs(allocator, clone_map);
-                }
-
-                const params_clone = try allocator.alloc(*RIROP, kernel.params.len);
-                for (kernel.params, 0..) |param, i| {
-                    params_clone[i] = try param.cloneWithRefs(allocator, clone_map);
-                }
-
-                cloned.* = RIROP{ .kernel = .{ .ops = ops_clone, .dims = kernel.dims, .params = params_clone } };
-            },
-            .param_addr => {
-                cloned.* = RIROP{ .param_addr = {} };
+            .linear_kernel => |lk| {
+                cloned.* = RIROP{ .linear_kernel = lk };
             },
         }
 

@@ -1,5 +1,6 @@
 const std = @import("std");
 const rir = @import("../rir/rir.zig");
+const DType = @import("../rir/dtype.zig").DType;
 
 pub const BinaryOperator = enum {
     Add,
@@ -56,7 +57,7 @@ pub const BuiltinCall = struct {
 pub const Constant = struct {
     ptr: *anyopaque,
     shape: []const usize,
-    dtype: rir.DType,
+    dtype: DType,
 
     pub fn asBytes(self: @This()) []const u8 {
         const ptr_as_bytes: [*]const u8 = @ptrCast(self.ptr);

@@ -1,144 +1,90 @@
 const std = @import("std");
 
-// Assuming your RIROP and related types are imported/available
 const rir = @import("rir.zig");
 const RIROP = rir.RIROP;
 
+const binopPat = struct {
+    a: *Pattern,
+    b: *Pattern,
+};
+
 pub const Pattern = union(enum) {
-    // Exact matches
-    add: struct { a: *Pattern, b: *Pattern },
-    divide: struct { a: *Pattern, b: *Pattern },
+    add: ?binopPat,
+    divide: ?binopPat,
     load: struct { source: *Pattern },
     store: struct { source: *Pattern, buffer: *Pattern },
     copy: struct { dest: *Pattern, src: *Pattern },
-    view: struct { shape: ?[]const usize, src: *Pattern },
+    view: ?struct { shape: ?[]const usize, src: *Pattern },
 
-    // Wildcards
-    any, // matches any single node
+    graph_kernel,
 
-    // Specific value matches
+    any,
+
     buffer: ?rir.Buffer,
-    position: ?union(enum) {
-        local: enum { x, y, z },
-        global: enum { x, y, z },
+
+    binop: ?union(enum) {
+        add: ?binopPat,
+        div: ?binopPat,
     },
-    param_addr,
 };
 
-pub const MatchResult = struct {
-    matched: bool,
-    captured: []const *RIROP, // All the ops that matched
-
-    pub fn deinit(self: *MatchResult, allocator: std.mem.Allocator) void {
-        allocator.free(self.captured);
-    }
-};
-
-pub fn match(allocator: std.mem.Allocator, pattern: *Pattern, target: *RIROP) !MatchResult {
+pub fn match(allocator: std.mem.Allocator, pattern: *Pattern, ops: []*RIROP) ![]*RIROP {
     var matcher = PatternMatcher.init(allocator);
-    return try matcher.match(pattern, target);
+    return try matcher.match(pattern, ops);
 }
 
 const PatternMatcher = struct {
     allocator: std.mem.Allocator,
-    captured_ops: std.ArrayList(*RIROP),
+    captured_ops: std.array_list.Managed(*RIROP),
+    matched_ops: std.array_list.Managed(*RIROP),
 
     fn init(allocator: std.mem.Allocator) PatternMatcher {
         return PatternMatcher{
             .allocator = allocator,
-            .captured_ops = std.ArrayList(*RIROP).init(allocator),
+            .captured_ops = std.array_list.Managed(*RIROP).init(allocator),
+            .matched_ops = std.array_list.Managed(*RIROP).init(allocator),
         };
     }
 
-    fn match(self: *PatternMatcher, pattern: *Pattern, target: *RIROP) !MatchResult {
+    fn match(self: *PatternMatcher, pattern: *Pattern, ops: []*RIROP) ![]*RIROP {
         defer self.captured_ops.deinit();
 
-        const matched = try self.matchRecursive(pattern, target);
+        for (ops) |op| {
+            try self.matchRecursive(pattern, op);
+        }
 
-        return MatchResult{
-            .matched = matched,
-            .captured = if (matched) try self.captured_ops.toOwnedSlice() else &[_]*RIROP{},
-        };
+        return try self.matched_ops.toOwnedSlice();
     }
 
-    fn matchRecursive(self: *PatternMatcher, pattern: *Pattern, target: *RIROP) !bool {
-        // Capture every op that gets matched
-        try self.captured_ops.append(target);
+    fn matchRecursive(self: *PatternMatcher, pattern: *Pattern, op: *RIROP) !void {
+        for (self.captured_ops.items) |captured_op| {
+            if (op == captured_op) return;
+        }
 
-        switch (pattern.*) {
-            .any => return true,
+        try self.captured_ops.append(op);
 
-            .add => |padd| {
-                if (target.* != .add) return false;
-                const tadd = target.add;
-                return (try self.matchRecursive(padd.a, tadd.a)) and
-                    (try self.matchRecursive(padd.b, tadd.b));
-            },
-
-            .divide => |pdiv| {
-                if (target.* != .divide) return false;
-                const tdiv = target.divide;
-                return (try self.matchRecursive(pdiv.a, tdiv.a)) and
-                    (try self.matchRecursive(pdiv.b, tdiv.b));
-            },
-
-            .load => |pload| {
-                if (target.* != .load) return false;
-                return try self.matchRecursive(pload.source, target.load.source);
-            },
-
-            .store => |pstore| {
-                if (target.* != .store) return false;
-                const tstore = target.store;
-                return (try self.matchRecursive(pstore.source, tstore.source)) and
-                    (try self.matchRecursive(pstore.buffer, tstore.buffer));
-            },
-
-            .copy => |pcopy| {
-                if (target.* != .copy) return false;
-                const tcopy = target.copy;
-                return (try self.matchRecursive(pcopy.dest, tcopy.dest)) and
-                    (try self.matchRecursive(pcopy.src, tcopy.src));
-            },
-
-            .view => |pview| {
-                if (target.* != .view) return false;
-                const tview = target.view;
-
-                if (pview.shape) |shape| {
-                    if (tview.shape.len != shape.len) return false;
-                    for (shape, 0..) |dim, i| {
-                        if (tview.shape[i] != dim) return false;
-                    }
+        switch (op.*) {
+            .add => |add| {
+                if (pattern.* == .add) {
+                    if (pattern.add == null) try self.matched_ops.append(op) else @panic("complex patterns not implemented in pm yet");
                 }
-
-                return try self.matchRecursive(pview.src, tview.src);
+                try self.matchRecursive(pattern, add.a);
+                try self.matchRecursive(pattern, add.b);
             },
 
-            .buffer => |pbuf| {
-                if (target.* != .buffer) return false;
-                return pbuf == null; // wildcard or exact match
-            },
-
-            .position => |ppos| {
-                if (target.* != .position) return false;
-                if (ppos == null) return true;
-
-                switch (ppos.?) {
-                    .local => |local_val| {
-                        return target.position == .local and
-                            @intFromEnum(target.position.local) == @intFromEnum(local_val);
-                    },
-                    .global => |global_val| {
-                        return target.position == .global and
-                            @intFromEnum(target.position.global) == @intFromEnum(global_val);
-                    },
+            .view => |view| {
+                if (pattern.* == .view) {
+                    if (pattern.view == null) try self.matched_ops.append(op) else @panic("complex patterns not implemented in pm yet");
                 }
+                try self.matchRecursive(pattern, view.src);
+            },
+            .buffer => {},
+            .graph_kernel => |graph_kernel| {
+                _ = graph_kernel;
+                if (pattern.* == .graph_kernel) try self.matched_ops.append(op);
             },
 
-            .param_addr => {
-                return target.* == .param_addr;
-            },
+            else => std.debug.panic("op {any} not implemented in pm", .{@intFromEnum(op.*)}),
         }
     }
 };

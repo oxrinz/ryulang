@@ -2,15 +2,11 @@
     .name = .ryulang,
     .version = "0.0.0",
     .fingerprint = 0xebc976b42ba297d6,
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.1",
     .dependencies = .{
-        .rhlo = .{
-            .url = "git+https://github.com/oxrinz/rhlo#fa21daaf9e692e67d2230977dff9cd26b810c07f",
-            .hash = "rhlo-0.0.0-Zp-qnrqjAAAP1905VHiGKa7FglVOVjzp012l1Z5gqHLg",
-        },
         .rllvm = .{
-            .url = "git+https://github.com/oxrinz/rllvm#d8ef54bc730244d3d9a0d0148c641890488f33c1",
-            .hash = "N-V-__8AAJ4PAwBu65RF28jr-DiK3_CM0n24hCrDVNYSWSQ5",
+            .url = "git+https://github.com/oxrinz/rllvm#47c85cd05de7cecae78d260b642be0134d2b70a6",
+            .hash = "N-V-__8AAC4PAwDZxcsL9sHNxneMfBUvQcPJychTn38oOvun",
         },
     },
     .paths = .{

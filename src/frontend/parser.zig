@@ -3,8 +3,8 @@ const tokens_script = @import("tokens.zig");
 const Token = tokens_script.Token;
 const TokenType = tokens_script.TokenType;
 const ast = @import("ast.zig");
-const diagnostics = @import("../diagnostics.zig");
 const rir = @import("../rir/rir.zig");
+const DType = @import("../rir/dtype.zig").DType;
 
 pub const Parser = struct {
     tokens: []const Token,
@@ -20,7 +20,7 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser) !ast.Module {
-        var stmt_array = std.ArrayList(ast.Statement).init(self.allocator);
+        var stmt_array = std.array_list.Managed(ast.Statement).init(self.allocator);
         while (self.cursor < self.tokens.len - 1 and self.curr().type != .RIGHT_BRACE) {
             try stmt_array.append(try self.parseStatement());
         }
@@ -28,7 +28,7 @@ pub const Parser = struct {
     }
 
     fn parseBlock(self: *Parser) !ast.Block {
-        var stmt_array = std.ArrayList(ast.Statement).init(self.allocator);
+        var stmt_array = std.array_list.Managed(ast.Statement).init(self.allocator);
         while (self.curr().type != .RIGHT_BRACE) {
             try stmt_array.append(try self.parseStatement());
         }
@@ -109,7 +109,7 @@ pub const Parser = struct {
         switch (self.curr().type) {
             .NUMBER => {
                 const literal = self.curr().literal.?;
-                const dtype: rir.DType = switch (literal) {
+                const dtype: DType = switch (literal) {
                     .integer => .i32,
                     .float => .f32,
                     else => unreachable,
@@ -176,8 +176,8 @@ pub const Parser = struct {
                 } else unreachable;
             },
             .LEFT_BRACKET => {
-                var value_array = std.ArrayList(u8).init(self.allocator);
-                var shape_array = std.ArrayList(usize).init(self.allocator);
+                var value_array = std.array_list.Managed(u8).init(self.allocator);
+                var shape_array = std.array_list.Managed(usize).init(self.allocator);
                 self.cursor += 1;
 
                 if (self.curr().type == .RIGHT_BRACKET) {
@@ -194,7 +194,7 @@ pub const Parser = struct {
                     return expr;
                 }
 
-                var dtype: rir.DType = undefined;
+                var dtype: DType = undefined;
                 var nested_shape: ?[]const usize = null;
                 var count: usize = 0;
 
@@ -244,11 +244,6 @@ pub const Parser = struct {
                 return expr;
             },
             else => {
-                const msg = try std.fmt.allocPrint(diagnostics.arena.allocator(), "Syntax error at line {}. Expected one of the following: NUMBER, LEFT_PAREN, IDENTIFIER, LEFT_BRACKET. Got token type {}", .{
-                    self.curr().line,
-                    self.curr().type,
-                });
-                diagnostics.addError(msg, self.curr().line);
                 return error.SyntaxError;
             },
         }
@@ -284,7 +279,7 @@ pub const Parser = struct {
             self.cursor += 1;
             return &[_]*ast.Expression{};
         }
-        var param_list = std.ArrayList(*ast.Expression).init(self.allocator);
+        var param_list = std.array_list.Managed(*ast.Expression).init(self.allocator);
         try param_list.append(try self.parseExpression(0));
         while (self.curr().type != .RIGHT_PAREN) {
             try self.expect(.COMMA);
@@ -316,11 +311,6 @@ pub const Parser = struct {
 
     fn expect(self: *Parser, token_type: TokenType) !void {
         if (self.curr().type != token_type) {
-            const msg = try std.fmt.allocPrint(diagnostics.arena.allocator(), "Syntax error. Expected token type {}. Got token type {}", .{
-                token_type,
-                self.curr().type,
-            });
-            diagnostics.addError(msg, self.curr().line);
             return error.SyntaxError;
         }
     }

@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const DType = @import("../../rir/dtype.zig").DType;
+
 pub const Register = []const u8;
 
 pub const Immediate = union(enum) {
@@ -18,30 +20,16 @@ pub const Operand = union(enum) {
 
 pub const MemoryRef = struct {
     address: []const u8,
-    type: DataType,
+    type: DType,
 };
 
-pub const DataType = enum {
-    u8,
-    s8,
-    u16,
-    s16,
-    u32,
-    s32,
-    u64,
-    s64,
-    f16,
-    f32,
-    f64,
-    b8,
-    b16,
-    b32,
-    b64,
-    pred,
-    pub fn toString(self: DataType) []const u8 {
-        return @tagName(self);
-    }
-};
+pub fn convertDType(dtype: DType) []const u8 {
+    return switch (dtype) {
+        .i32 => "s32",
+        .i64 => "s64",
+        else => return @tagName(dtype),
+    };
+}
 
 pub const SpaceType = enum {
     global,
@@ -75,7 +63,7 @@ pub const AddInst = struct {
     dest: Operand,
     src1: Operand,
     src2: Operand,
-    type: DataType,
+    type: DType,
     wide: bool = false,
     modifier: enum {
         none,
@@ -99,7 +87,7 @@ pub const AndInst = struct {
     dest: Operand,
     src1: Operand,
     src2: Operand,
-    type: DataType,
+    type: DType,
 };
 
 pub const FusedMultiplyAddInst = struct {
@@ -107,7 +95,7 @@ pub const FusedMultiplyAddInst = struct {
     src1: Operand,
     src2: Operand,
     src3: Operand,
-    type: DataType,
+    type: DType,
     modifier: enum {
         none,
         lo,
@@ -130,7 +118,7 @@ pub const MulInst = struct {
     dest: Operand,
     src1: Operand,
     src2: Operand,
-    type: DataType,
+    type: DType,
     modifier: enum {
         none,
         lo,
@@ -153,26 +141,26 @@ pub const ShiftLeftInst = struct {
     dest: Operand,
     src1: Operand,
     src2: Operand,
-    type: DataType,
+    type: DType,
 };
 
 pub const MoveInst = struct {
     dest: Operand,
     src: Operand,
-    type: DataType,
+    type: DType,
 };
 
 pub const LoadInst = struct {
     dest: Operand,
     src: Operand,
-    type: DataType,
+    type: DType,
     space: SpaceType,
 };
 
 pub const StoreInst = struct {
     dest: Operand,
     src: Operand,
-    type: DataType,
+    type: DType,
     space: SpaceType,
 };
 
@@ -184,7 +172,7 @@ pub const BranchInst = struct {
 pub const ConvertToAddrInst = struct {
     to_generic: bool,
     space: SpaceType,
-    type: DataType,
+    type: DType,
     dest: Operand,
     src: Operand,
 };
@@ -195,7 +183,7 @@ pub const ShuffleInst = struct {
     offset_or_source: Operand,
     lane_mask: Operand,
     mask: Operand,
-    type: DataType,
+    type: DType,
     mode: Mode,
     pub const Mode = enum {
         up,
@@ -217,7 +205,7 @@ pub const SetpInst = struct {
     dest: []const u8,
     src1: Operand,
     src2: Operand,
-    type: DataType,
+    type: DType,
     cmp: CompareOp,
     pub const CompareOp = enum {
         eq,
@@ -249,7 +237,7 @@ pub const Directive = union(enum) {
 };
 
 pub const RegisterDecl = struct {
-    type: DataType,
+    type: DType,
     count: u32,
     name: []const u8,
 };
@@ -257,7 +245,7 @@ pub const RegisterDecl = struct {
 pub const GlobalDecl = struct {
     name: []const u8,
     size: u64,
-    type: DataType,
+    type: DType,
 };
 
 pub const PTXAst = struct {

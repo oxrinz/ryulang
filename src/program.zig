@@ -46,26 +46,64 @@ pub const Program = struct {
         defer core.LLVMDisposeBuilder(builder);
         core.LLVMPositionBuilderAtEnd(builder, entry);
 
-        //construct ptx
-        var ptx_constructor = nvidia.PTXConstructor.init(module, builder);
+        var pc = ProgramCompiler.init(module, builder, allocator);
 
         for (self.effects) |effect| {
-            const d_results = try ptx_constructor.compileKernel(effect.targets[0]);
-
-            const result = try ptx_constructor.copyToH(d_results[0], 4);
-
-            switch (effect.effect_type) {
-                .print => {
-                    const loaded_float = core.LLVMBuildLoad2(builder, core.LLVMFloatType(), result, "loaded_float");
-                    const loaded_value = core.LLVMBuildFPToSI(builder, loaded_float, core.LLVMInt32Type(), "loaded_value");
-                    try rllvm.utils.printInt(module, builder, loaded_value);
-                },
+            for (effect.targets) |target_op| {
+                try pc.compileOp(target_op);
             }
+
+            // const d_results = try ptx_constructor.compileKernel(effect.targets[0]);
+
+            // const result = try ptx_constructor.copyToH(d_results[0], 4);
+
+            // switch (effect.effect_type) {
+            //     .print => {
+            //         const loaded_float = core.LLVMBuildLoad2(builder, core.LLVMFloatType(), result, "loaded_float");
+            //         const loaded_value = core.LLVMBuildFPToSI(builder, loaded_float, core.LLVMInt32Type(), "loaded_value");
+            //         try rllvm.utils.printInt(module, builder, loaded_value);
+            //     },
+            // }
         }
 
         const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
         _ = core.LLVMBuildRet(builder, zero);
 
         return module;
+    }
+};
+
+const ProgramCompiler = struct {
+    allocator: std.mem.Allocator,
+    constructor: nvidia.PTXConstructor,
+    results: std.AutoHashMap(*rir.RIROP, []types.LLVMValueRef),
+    compiled: std.array_list.Aligned(*rir.RIROP, null),
+
+    pub fn init(module: types.LLVMModuleRef, builder: types.LLVMBuilderRef, allocator: std.mem.Allocator) ProgramCompiler {
+        return .{
+            .allocator = allocator,
+            .constructor = nvidia.PTXConstructor.init(module, builder),
+            .results = std.AutoHashMap(*rir.RIROP, []types.LLVMValueRef).init(allocator),
+            .compiled = std.array_list.Aligned(*rir.RIROP, null).empty,
+        };
+    }
+
+    fn compileOp(self: *ProgramCompiler, op: *rir.RIROP) !void {
+        for (self.compiled.items) |compiled| {
+            if (op == compiled) return;
+        }
+        try self.compiled.append(self.allocator, op);
+
+        switch (op.*) {
+            .linear_kernel => |lk| {
+                const d_results = try self.constructor.compileKernel(lk);
+                try self.results.put(op, d_results);
+
+                for (lk.params) |param| {
+                    try self.compileOp(param);
+                }
+            },
+            else => {},
+        }
     }
 };

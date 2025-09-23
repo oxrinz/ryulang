@@ -16,7 +16,6 @@ const Allocator = std.mem.Allocator;
 
 const pm = @import("rir/pattern-matcher.zig");
 
-const diagnostics = @import("diagnostics.zig");
 const Lexer = @import("frontend/lexer.zig").Lexer;
 const Parser = @import("frontend/parser.zig").Parser;
 const gen = @import("rir/rir-gen.zig");
@@ -37,7 +36,6 @@ const CompilerArgs = struct {
 pub fn main() anyerror!void {
     var debug_allocator = std.heap.DebugAllocator(.{}){};
     var arena_instance = std.heap.ArenaAllocator.init(debug_allocator.allocator());
-    defer diagnostics.arena.deinit();
     defer arena_instance.deinit();
     const arena = arena_instance.allocator();
 
@@ -136,13 +134,11 @@ pub fn main() anyerror!void {
     if (mem.eql(u8, cmd, "run")) {
         execute(module) catch |err| {
             std.debug.print("{}", .{err});
-            diagnostics.printAll();
             std.process.exit(0);
         };
     } else if (mem.eql(u8, cmd, "build")) {
         build(arena, module) catch |err| {
             std.debug.print("{}", .{err});
-            diagnostics.printAll();
             std.process.exit(0);
         };
     }
@@ -190,8 +186,8 @@ fn build(allocator: std.mem.Allocator, module: types.LLVMModuleRef) anyerror!voi
         libcuda_path,
         "-lcuda",
     }, allocator);
-    child.stdout = std.io.getStdOut();
-    child.stderr = std.io.getStdErr();
+    child.stdout = std.fs.File.stdout();
+    child.stderr = std.fs.File.stderr();
     const term = try child.spawnAndWait();
     if (term.Exited != 0) {
         return error.LinkError;
@@ -211,7 +207,7 @@ fn execute(module: types.LLVMModuleRef) !void {
     defer execution.LLVMDisposeExecutionEngine(engine_ref);
 
     const main_addr = execution.LLVMGetFunctionAddress(engine_ref, "main");
-    const MainFn = fn () callconv(.C) f32;
+    const MainFn = fn () callconv(.c) f32;
     const main_fn: *const MainFn = @ptrFromInt(main_addr);
 
     _ = main_fn();

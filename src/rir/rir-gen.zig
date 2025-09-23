@@ -16,7 +16,7 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
     var used = std.StringHashMap(void).init(allocator);
     defer used.deinit();
 
-    var graph = std.ArrayList(*rir.RIROP).init(allocator);
+    var graph = std.array_list.Managed(*rir.RIROP).init(allocator);
 
     const collectUsedVariables = struct {
         pub fn collectUsedVariables(expr: ast.Expression, in_used: *std.StringHashMap(void)) !void {
@@ -45,13 +45,13 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
 
     const Generator = struct {
         allocator: std.mem.Allocator,
-        effects: std.ArrayList(program.Effect),
+        effects: std.array_list.Managed(program.Effect),
         variables: *std.StringArrayHashMap(*rir.RIROP),
 
         pub fn init(alloc: std.mem.Allocator, vars: *std.StringArrayHashMap(*rir.RIROP)) @This() {
             return .{
                 .allocator = alloc,
-                .effects = std.ArrayList(program.Effect).init(alloc),
+                .effects = std.array_list.Managed(program.Effect).init(alloc),
                 .variables = vars,
             };
         }
@@ -78,7 +78,7 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
                     for (constant.shape) |dim| {
                         size *= dim;
                     }
-                    const float_array = @as([*]f32, @alignCast(@ptrCast(constant.ptr)))[0..size];
+                    const float_array = @as([*]f32, @ptrCast(@alignCast(constant.ptr)))[0..size];
                     var llvm_vals = try self.allocator.alloc(types.LLVMValueRef, size);
                     defer self.allocator.free(llvm_vals);
 
@@ -89,9 +89,8 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
                     const buffer = try self.allocator.create(rir.RIROP);
                     buffer.* = .{
                         .buffer = .{
-                            .device = .host,
+                            .device = .{ .host = array },
                             .dtype = constant.dtype,
-                            .ref = array,
                             .size = size,
                         },
                     };
@@ -114,7 +113,7 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
                     if (std.mem.eql(u8, builtin_call.identifier, "rand")) {
                         unreachable;
                     } else if (std.mem.eql(u8, builtin_call.identifier, "print")) {
-                        var operands = std.ArrayList(*rir.RIROP).init(self.allocator);
+                        var operands = std.array_list.Managed(*rir.RIROP).init(self.allocator);
                         for (builtin_call.args) |arg| {
                             const op = try self.generateExpression(arg.*);
                             try operands.append(op.?);
@@ -136,7 +135,6 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !progra
                     } else unreachable;
                 },
                 .variable => |variable| {
-                    std.debug.print("VAR: {any}\n", .{variable.identifier});
                     return self.variables.get(variable.identifier).?;
                 },
             }

@@ -5,10 +5,11 @@ const rir_gen = @import("rir/rir-gen.zig");
 const Program = @import("program.zig").Program;
 const dashboard = @import("dashboard.zig");
 const pm = @import("rir/pattern-matcher.zig");
+const kir = @import("rir/kernel-ir.zig");
 
 /// Converts an ast module into an optimized and finalized ryu program
 pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !Program {
-    var program = try rir_gen.generateProgram(module, allocator);
+    const program = try rir_gen.generateProgram(module, allocator);
     const base_graph_stage = dashboard.Stage{
         .title = "Base Graph",
         .ops = program.graph,
@@ -16,24 +17,19 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !Progra
     try dashboard.addStage(base_graph_stage);
 
     for (program.effects) |*effect| {
-        const draft_kernel = try kernelize(effect.targets, allocator);
-        var new_graph = try allocator.alloc(*rir.RIROP, 1);
-        new_graph[0] = draft_kernel;
-        program.graph = new_graph;
+        try createKernels(effect.targets, allocator);
         const create_kernels_stage = dashboard.Stage{
             .title = "Create Kernels",
             .ops = program.graph,
         };
         try dashboard.addStage(create_kernels_stage);
 
-        const linearized_kernel = try linealizeKernel(draft_kernel, allocator);
-        new_graph[0] = linearized_kernel;
-        program.graph = new_graph;
-        const linearize_kernels_stage = dashboard.Stage{
-            .title = "Linearize Kernels",
-            .ops = program.graph,
-        };
-        try dashboard.addStage(linearize_kernels_stage);
+        // try linealizeKernels(effect.targets, allocator);
+        // const linearize_kernels_stage = dashboard.Stage{
+        //     .title = "Linearize Kernels",
+        //     .ops = program.graph,
+        // };
+        // try dashboard.addStage(linearize_kernels_stage);
 
         effect.targets = program.graph;
     }
@@ -41,115 +37,115 @@ pub fn generateProgram(module: ast.Module, allocator: std.mem.Allocator) !Progra
     return program;
 }
 
-const DimRegs = struct {
-    local_x: *rir.RIROP,
-    local_y: *rir.RIROP,
-    fn init(allocator: std.mem.Allocator, kernel_ops: std.ArrayList(*rir.RIROP)) DimRegs {
-        const local_x = try allocator.create(rir.RIROP);
-        const local_y = try allocator.create(rir.RIROP);
-        local_x.* = .{ .position = .{ .local = .x } };
-        local_y.* = .{ .position = .{ .local = .y } };
-        try kernel_ops.append(local_x);
-        try kernel_ops.append(local_y);
-        return .{
-            .local_x = local_x,
-            .local_y = local_y,
+// IMPORTANT: this is a fake function, it lies, it actually outputs linear kernel
+fn createKernels(ops: []*rir.RIROP, allocator: std.mem.Allocator) !void {
+    // step 1: find all binary ops and store them
+    var pattern = pm.Pattern{ .add = null };
+    const binops = try pm.match(allocator, &pattern, ops);
+
+    // step 2: create output buffer
+    const output_buffer = try allocator.create(rir.RIROP);
+    output_buffer.* = .{ .buffer = .{
+        .device = .{ .device = 0 },
+        .dtype = .f32,
+        .size = binops[0].getSizeInBytes(allocator),
+    } };
+    const output_buffer_view = try allocator.create(rir.RIROP);
+    output_buffer_view.* = .{
+        .view = .{ .shape = binops[0].getShape(), .src = output_buffer },
+    };
+
+    // step 3: replace binops with kernels
+    const OpContainer = struct {
+        inner_allocator: std.mem.Allocator,
+        kernel_ops: std.array_list.Managed(*kir.KIROP),
+        kernel_params: std.array_list.Managed(*rir.RIROP),
+
+        pub fn init(inner_allocator: std.mem.Allocator) !@This() {
+            return .{
+                .inner_allocator = inner_allocator,
+                .kernel_ops = std.array_list.Managed(*kir.KIROP).init(inner_allocator),
+                .kernel_params = std.array_list.Managed(*rir.RIROP).init(inner_allocator),
+            };
+        }
+
+        pub fn appendInstruction(self: *@This(), op: kir.KIROP) !*kir.KIROP {
+            const op_ptr = try self.inner_allocator.create(kir.KIROP);
+            op_ptr.* = op;
+            try self.kernel_ops.append(op_ptr);
+            return op_ptr;
+        }
+
+        pub fn getGraphKernel(self: *@This()) !kir.LinearKernel {
+            return .{
+                .ops = try self.kernel_ops.toOwnedSlice(),
+                .params = try self.kernel_params.toOwnedSlice(),
+            };
+        }
+    };
+
+    for (binops) |binop| {
+        var op_container = try OpContainer.init(allocator);
+
+        // generate params
+        switch (binop.*) {
+            .add => |add| {
+                if (add.a.* == .view and add.b.* == .view) {
+                    try op_container.kernel_params.append(add.a);
+                    try op_container.kernel_params.append(add.b);
+                }
+            },
+            else => std.debug.panic("op {any} not implemented in createKernel", .{@intFromEnum(binop.*)}),
+        }
+        try op_container.kernel_params.append(output_buffer_view);
+
+        // generate ops
+        switch (binop.*) {
+            .add => |add| {
+                const local_x = try op_container.appendInstruction(.{
+                    .special = .{ .local = .x },
+                });
+                const load_param_addr_a = try op_container.appendInstruction(.{
+                    .load = .{ .addr = .{ .param = add.a } },
+                });
+                const load_param_addr_b = try op_container.appendInstruction(.{
+                    .load = .{ .addr = .{ .param = add.b } },
+                });
+                const addr_a = try op_container.appendInstruction(.{
+                    .add = .{
+                        .src1 = .{ .kirop = local_x },
+                        .src2 = .{ .kirop = load_param_addr_a },
+                    },
+                });
+                _ = addr_a;
+                _ = load_param_addr_b;
+            },
+            else => std.debug.panic("op {any} not implemented in createKernel", .{@intFromEnum(binop.*)}),
+        }
+
+        // replace binop with kernel op
+        binop.* = .{
+            .linear_kernel = try op_container.getGraphKernel(),
         };
     }
-};
-
-fn kernelize(ops: []*rir.RIROP, allocator: std.mem.Allocator) !*rir.RIROP {
-    // step 1: eat ops up until we hit a non-eatable and collect input parameters
-    var inputs = std.ArrayList(*rir.RIROP).init(allocator);
-    for (ops) |op| {
-        try inputs.appendSlice(try eatInputs(op, allocator));
-    }
-
-    // step 2: collect output parameters
-    var outputs = std.ArrayList(*rir.RIROP).init(allocator);
-    for (ops) |op| {
-        switch (op.*) {
-            .store => {
-                try outputs.append(op);
-            },
-            else => {},
-        }
-    }
-
-    // step 3: iterate over inputs, add loading logic
-    for (inputs.items) |input| {
-        _ = input;
-        var any = pm.Pattern{ .any = {} };
-        var pattern = pm.Pattern{ .add = .{ .a = &any, .b = &any } };
-        const fuck = try pm.match(allocator, &pattern, ops[0]);
-        std.debug.print("input: {any}\n", .{fuck.captured});
-    }
-
-    var params = std.ArrayList(*rir.RIROP).init(allocator);
-    try params.appendSlice(try inputs.toOwnedSlice());
-    try params.appendSlice(try outputs.toOwnedSlice());
-    const kernel = try allocator.create(rir.RIROP);
-    kernel.* = .{
-        .draft_kernel = .{
-            .params = try params.toOwnedSlice(),
-            .ops = ops,
-        },
-    };
-    return kernel;
 }
 
-// replace non eatable with param_addr and loading logic
-fn eatInputs(op: *rir.RIROP, allocator: std.mem.Allocator) ![]*rir.RIROP {
-    var inputs = std.ArrayList(*rir.RIROP).init(allocator);
-    switch (op.*) {
-        .add => |*add| {
-            if (shouldEat(add.a)) {
-                try inputs.appendSlice(try eatInputs(add.a, allocator));
-            } else {
-                try inputs.append(add.a);
-                const param_addr_op = try allocator.create(rir.RIROP);
-                param_addr_op.* = .param_addr;
-                add.a = param_addr_op;
-            }
-            if (shouldEat(add.b)) {
-                try inputs.appendSlice(try eatInputs(add.b, allocator));
-            } else {
-                try inputs.append(add.b);
-                const param_addr_op = try allocator.create(rir.RIROP);
-                param_addr_op.* = .param_addr;
-                add.b = param_addr_op;
-            }
-        },
-        .store => |store| {
-            if (shouldEat(store.source)) {
-                try inputs.appendSlice(try eatInputs(store.source, allocator));
-            }
-        },
-        else => {},
-    }
-    return try inputs.toOwnedSlice();
-}
-
-fn shouldEat(op: *rir.RIROP) bool {
-    return switch (op.*) {
-        .add, .store => true,
-        else => false,
-    };
-}
-
-fn linealizeKernel(kernel_op: *rir.RIROP, allocator: std.mem.Allocator) !*rir.RIROP {
-    std.debug.assert(kernel_op.* == .draft_kernel);
+fn linealizeKernels(ops: []*rir.RIROP, allocator: std.mem.Allocator) !void {
+    // step 1: find all kernel ops and store them
+    const pattern = try allocator.create(pm.Pattern);
+    pattern.* = .graph_kernel;
+    const kernels = try pm.match(allocator, pattern, ops);
 
     const linearize_op = struct {
-        fn linearize_op(op: *rir.RIROP, list: *std.ArrayList(*rir.RIROP)) !void {
+        fn linearize_op(op: *kir.KIROP, list: *std.array_list.Managed(*kir.KIROP)) !void {
             switch (op.*) {
                 .add => |add| {
-                    try linearize_op(add.a, list);
-                    try linearize_op(add.b, list);
+                    if (add.src1 == .kirop) try linearize_op(add.src1.kirop, list);
+                    if (add.src2 == .kirop) try linearize_op(add.src2.kirop, list);
                     try list.append(op);
                 },
                 .store => |store| {
-                    try linearize_op(store.source, list);
+                    try linearize_op(store.src.kirop, list);
                     try list.append(op);
                 },
                 else => {
@@ -159,52 +155,34 @@ fn linealizeKernel(kernel_op: *rir.RIROP, allocator: std.mem.Allocator) !*rir.RI
         }
     }.linearize_op;
 
-    var linearized = std.ArrayList(*rir.RIROP).init(allocator);
-    for (kernel_op.draft_kernel.ops) |op| {
-        try linearize_op(op, &linearized);
+    var linearized = std.array_list.Managed(*kir.KIROP).init(allocator);
+    for (kernels) |kernel| {
+        for (kernel.graph_kernel.ops) |op| {
+            try linearize_op(op, &linearized);
+        }
     }
 
-    const shape = kernel_op.draft_kernel.params[0].getShape();
+    std.debug.print("ahh: {any}\n", .{linearized.items});
 
-    var total_elements: u64 = 1;
-    for (shape) |dim| {
-        total_elements *= dim;
-    }
-
-    const block_size_x = 16;
-    const block_size_y = 16;
-    const threads_per_block = block_size_x * block_size_y;
-
-    const grid_x = (total_elements + threads_per_block - 1) / threads_per_block;
-
-    const kernel = try allocator.create(rir.RIROP);
-    kernel.* = .{
-        .kernel = .{
-            .params = kernel_op.draft_kernel.params,
-            .ops = try linearized.toOwnedSlice(),
-            .dims = .{
-                .local = .{
-                    .x = block_size_x,
-                    .y = block_size_y,
-                    .z = 1,
-                },
-                .global = .{
-                    .x = grid_x,
-                    .y = 1,
-                    .z = 1,
-                },
+    for (kernels) |kernel| {
+        kernel.* = .{
+            .linear_kernel = .{
+                .ops = try linearized.toOwnedSlice(),
+                .params = kernel.linear_kernel.params,
             },
-        },
-    };
-    return kernel;
-}
+        };
+    }
 
-fn calculateDims(op: *rir.RIROP) !rir.KernelDims {
-    const shape = op.getShape();
-    return .{
-        .local = .{
-            .x = shape[0],
-            .y = shape[1],
-        },
-    };
+    // const shape = kernel_op.draft_kernel.params[0].getShape();
+
+    // var total_elements: u64 = 1;
+    // for (shape) |dim| {
+    //     total_elements *= dim;
+    // }
+
+    // const block_size_x = 16;
+    // const block_size_y = 16;
+    // const threads_per_block = block_size_x * block_size_y;
+
+    // const grid_x = (total_elements + threads_per_block - 1) / threads_per_block;
 }

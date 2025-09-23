@@ -5,7 +5,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
     if (ast.kernels.len == 0) {
         return error.NoKernels;
     }
-    var ptx = std.ArrayList(u8).init(allocator);
+    var ptx = std.array_list.Managed(u8).init(allocator);
     defer ptx.deinit();
     var writer = ptx.writer();
     var operand_buffer: [64]u8 = undefined;
@@ -24,10 +24,10 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
     for (kernel.directives) |directive| {
         switch (directive) {
             .reg => |reg| {
-                try writer.print(" .reg .{s} {s}<{d}>;\n", .{ reg.type.toString(), reg.name, reg.count });
+                try writer.print(" .reg .{s} {s}<{d}>;\n", .{ @tagName(reg.type), reg.name, reg.count });
             },
             .global => |global| {
-                try writer.print(" .global .{s} {s}[{d}];\n", .{ global.type.toString(), global.name, global.size });
+                try writer.print(" .global .{s} {s}[{d}];\n", .{ @tagName(global.type), global.name, global.size });
             },
         }
     }
@@ -37,7 +37,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             .add => |add| {
                 try writer.print(" add{s}.{s} {s}, {s}, {s};\n", .{
                     add.modifier.toString(),
-                    add.type.toString(),
+                    @tagName(add.type),
                     emitOperand(add.dest, &operand_buffer),
                     emitOperand(add.src1, &operand_buffer),
                     emitOperand(add.src2, &operand_buffer),
@@ -46,7 +46,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             .mul => |mul| {
                 try writer.print(" mul{s}.{s} {s}, {s}, {s};\n", .{
                     mul.modifier.toString(),
-                    mul.type.toString(),
+                    @tagName(mul.type),
                     emitOperand(mul.dest, &operand_buffer),
                     emitOperand(mul.src1, &operand_buffer),
                     emitOperand(mul.src2, &operand_buffer),
@@ -54,7 +54,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             },
             ._and => |_and| {
                 try writer.print(" and.{s} {s}, {s}, {s};\n", .{
-                    _and.type.toString(),
+                    @tagName(_and.type),
                     emitOperand(_and.dest, &operand_buffer),
                     emitOperand(_and.src1, &operand_buffer),
                     emitOperand(_and.src2, &operand_buffer),
@@ -62,14 +62,14 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             },
             .mov => |mov| {
                 try writer.print(" mov.{s} {s}, {s};\n", .{
-                    mov.type.toString(),
+                    @tagName(mov.type),
                     emitOperand(mov.dest, &operand_buffer),
                     emitOperand(mov.src, &operand_buffer),
                 });
             },
             .shl => |shl| {
                 try writer.print(" shl.{s} {s}, {s}, {s};\n", .{
-                    shl.type.toString(),
+                    @tagName(shl.type),
                     emitOperand(shl.dest, &operand_buffer),
                     emitOperand(shl.src1, &operand_buffer),
                     emitOperand(shl.src2, &operand_buffer),
@@ -78,7 +78,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             .ld => |ld| {
                 try writer.print(" ld.{s}.{s} {s}, [{s}];\n", .{
                     ld.space.toString(),
-                    ld.type.toString(),
+                    @tagName(ld.type),
                     emitOperand(ld.dest, &operand_buffer),
                     emitOperand(ld.src, &operand_buffer),
                 });
@@ -86,7 +86,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             .st => |st| {
                 try writer.print(" st.{s}.{s} [{s}], {s};\n", .{
                     st.space.toString(),
-                    st.type.toString(),
+                    @tagName(st.type),
                     emitOperand(st.dest, &operand_buffer),
                     emitOperand(st.src, &operand_buffer),
                 });
@@ -95,7 +95,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
                 try writer.print(" cvta{s}.{s}.{s} {s}, {s};\n", .{
                     if (cvta.to_generic) ".to" else "",
                     cvta.space.toString(),
-                    cvta.type.toString(),
+                    @tagName(cvta.type),
                     emitOperand(cvta.dest, &operand_buffer),
                     emitOperand(cvta.src, &operand_buffer),
                 });
@@ -103,7 +103,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             .fma => |fma| {
                 try writer.print(" mad{s}.{s} {s}, {s}, {s}, {s};\n", .{
                     fma.modifier.toString(),
-                    fma.type.toString(),
+                    @tagName(fma.type),
                     emitOperand(fma.dest, &operand_buffer),
                     emitOperand(fma.src1, &operand_buffer),
                     emitOperand(fma.src2, &operand_buffer),
@@ -113,7 +113,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             .shfl => |shfl| {
                 try writer.print(" shfl.sync.{s}.{s} {s}, {s}, {s}, {s}, {s};\n", .{
                     shfl.mode.toString(),
-                    shfl.type.toString(),
+                    @tagName(shfl.type),
                     emitOperand(shfl.dest, &operand_buffer),
                     emitOperand(shfl.src, &operand_buffer),
                     emitOperand(shfl.offset_or_source, &operand_buffer),
@@ -124,7 +124,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
             .setp => |setp| {
                 try writer.print(" setp.{s}.{s} {s}, {s}, {s};\n", .{
                     setp.cmp.toString(),
-                    setp.type.toString(),
+                    @tagName(setp.type),
                     setp.dest,
                     emitOperand(setp.src1, &operand_buffer),
                     emitOperand(setp.src2, &operand_buffer),

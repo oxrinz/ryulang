@@ -24,7 +24,7 @@ pub fn initKeywords(allocator: std.mem.Allocator) !void {
 pub const Lexer = struct {
     allocator: std.mem.Allocator,
     source: []const u8,
-    tokens: std.ArrayList(Token),
+    tokens: std.array_list.Managed(Token),
     currentIndex: usize = 0,
     currentLine: usize = 1,
     currentColumn: usize = 1,
@@ -35,7 +35,7 @@ pub const Lexer = struct {
         return .{
             .allocator = allocator,
             .source = source,
-            .tokens = std.ArrayList(Token).init(allocator),
+            .tokens = std.array_list.Managed(Token).init(allocator),
         };
     }
 
