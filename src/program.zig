@@ -53,17 +53,14 @@ pub const Program = struct {
                 try pc.compileOp(target_op);
             }
 
-            // const d_results = try ptx_constructor.compileKernel(effect.targets[0]);
+            for (pc.compiled.items) |compiled| {
+                const res = pc.results.get(compiled) orelse continue;
 
-            // const result = try ptx_constructor.copyToH(d_results[0], 4);
-
-            // switch (effect.effect_type) {
-            //     .print => {
-            //         const loaded_float = core.LLVMBuildLoad2(builder, core.LLVMFloatType(), result, "loaded_float");
-            //         const loaded_value = core.LLVMBuildFPToSI(builder, loaded_float, core.LLVMInt32Type(), "loaded_value");
-            //         try rllvm.utils.printInt(module, builder, loaded_value);
-            //     },
-            // }
+                for (res) |val| {
+                    const loaded_float = core.LLVMBuildLoad2(builder, core.LLVMFloatType(), val, "loaded_float");
+                    try rllvm.utils.printFloat(module, builder, loaded_float);
+                }
+            }
         }
 
         const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
@@ -96,13 +93,20 @@ const ProgramCompiler = struct {
 
         switch (op.*) {
             .linear_kernel => |lk| {
-                const d_results = try self.constructor.compileKernel(lk);
-                try self.results.put(op, d_results);
-
+                // compile the other kernels
                 for (lk.params) |param| {
                     try self.compileOp(param);
                 }
+
+                const d_results = try self.constructor.compileKernel(lk);
+                try self.results.put(op, d_results);
             },
+            .view => |view| {
+                try self.compileOp(view.src);
+            },
+            .copy => 
+
+            // TODO: the comment above isn't implemented, so it just does nothing. this should recursively compile all kernels before the current one
             else => {},
         }
     }

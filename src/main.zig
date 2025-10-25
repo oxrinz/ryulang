@@ -212,3 +212,12 @@ fn execute(module: types.LLVMModuleRef) !void {
 
     _ = main_fn();
 }
+
+fn writeToFile(module: types.LLVMModuleRef, filename: [:0]const u8) !void {
+    var error_msg: [*c]u8 = null;
+    if (core.LLVMWriteBitcodeToFile(module, filename.ptr, &error_msg) != 0) {
+        std.debug.print("Failed to write bitcode to file: {s}\n", .{error_msg});
+        core.LLVMDisposeMessage(error_msg);
+        return error.WriteBitcodeFailed;
+    }
+}

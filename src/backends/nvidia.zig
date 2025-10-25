@@ -45,9 +45,26 @@ pub const PTXConstructor = struct {
         const ptx = try buildKernel(kernel_op);
         const metadata = try calculateMetadata(kernel_op.params);
 
+        var h_params = std.array_list.Managed(types.LLVMValueRef).init(arena.allocator());
         var d_params = std.array_list.Managed(types.LLVMValueRef).init(arena.allocator());
-        const d_output = try self.alloc(4);
-        try d_params.append(d_output);
+        for (kernel_op.params) |param| {
+            std.debug.print("HELP: {any}\n", .{kernel_op.params[0].findInputs(arena.allocator())});
+            // const h_input_memory = core.LLVMBuildAlloca(self.builder, core.LLVMArrayType(core.LLVMFloatType(), @intCast(param.getSizeInBytes(arena.allocator()))), "h_param");
+            // param.buffer.device.host;
+            const buf = param.findInputs(arena.allocator())[0].buffer;
+            if (buf.device == .host) {
+                try h_params.append(buf.device.host.?);
+            }
+
+            const d_param_alloc = try self.alloc(param.getSizeInBytes(arena.allocator()));
+            try d_params.append(d_param_alloc);
+        }
+
+        // memcpy
+        for (kernel_op.params, 0..) |param, idx| {
+            const size_ptr = rllvm.llvm.core.LLVMConstInt(rllvm.llvm.core.LLVMInt64Type(), param.getSizeInBytes(arena.allocator()), 0);
+            try rllvm.cuda.copyHToD(self.module, self.builder, d_params.items[idx], h_params.items[idx], size_ptr);
+        }
 
         // launch kernel
         const kernel_len = ptx.len;
@@ -80,7 +97,20 @@ pub const PTXConstructor = struct {
             d_params.items,
         );
 
-        return d_params.toOwnedSlice();
+        for (kernel_op.params, 0..) |param, idx| {
+            const size_ptr = rllvm.llvm.core.LLVMConstInt(rllvm.llvm.core.LLVMInt64Type(), param.getSizeInBytes(arena.allocator()), 0);
+            try rllvm.cuda.copyDToH(self.module, self.builder, d_params.items[idx], h_params.items[idx], size_ptr);
+        }
+
+        const zero = core.LLVMConstInt(core.LLVMInt32Type(), 0, 0);
+        const idx = core.LLVMConstInt(core.LLVMInt32Type(), 1, 0);
+        var indices = [_]types.LLVMValueRef{ zero, idx };
+
+        const res = core.LLVMBuildGEP2(self.builder, core.LLVMArrayType(core.LLVMInt32Type(), 2), h_params.items[0], &indices, 2, "fuc");
+        const deref = core.LLVMBuildLoad2(self.builder, core.LLVMInt32Type(), res, "kill");
+        try rllvm.utils.printInt(self.module, self.builder, deref);
+
+        return h_params.toOwnedSlice();
     }
 
     pub fn alloc(self: *@This(), size_bytes: usize) !types.LLVMValueRef {
@@ -88,13 +118,6 @@ pub const PTXConstructor = struct {
         const pointer = core.LLVMBuildAlloca(self.builder, core.LLVMInt64Type(), "d_ptr");
         try cuda.memAlloc(self.module, self.builder, pointer, size_ref);
         return pointer;
-    }
-
-    pub fn copyToH(self: *@This(), from: types.LLVMValueRef, size_bytes: usize) !types.LLVMValueRef {
-        const size_ref = core.LLVMConstInt(core.LLVMInt64Type(), size_bytes, 0);
-        const host_ptr = core.LLVMBuildAlloca(self.builder, core.LLVMFloatType(), "h_ptr");
-        try cuda.copyDToH(self.module, self.builder, from, host_ptr, size_ref);
-        return host_ptr;
     }
 };
 
@@ -166,7 +189,7 @@ fn buildKernel(kernel: kir.LinearKernel) ![]const u8 {
         fn init(lk: kir.LinearKernel, allocator: std.mem.Allocator) !@This() {
             return .{
                 .allocator = allocator,
-                .register_manager = try RegisterManager.init(allocator),
+                .register_manager = try RegisterManager.init(allocator, lk),
                 .lk = lk,
                 .instructions = std.array_list.Managed(ptxast.Instruction).init(allocator),
             };
@@ -176,14 +199,21 @@ fn buildKernel(kernel: kir.LinearKernel) ![]const u8 {
             allocator: Allocator,
             counters: std.AutoHashMap(DType, usize),
             param_counter: usize = 0,
+            lk: kir.LinearKernel,
+
+            param_map: std.StringHashMap(*rir.RIROP),
 
             reg_map: std.AutoHashMap(kir.Operand, []const u8),
+            reg_types: std.StringHashMap(DType),
 
-            pub fn init(allocator: Allocator) !RegisterManager {
+            pub fn init(allocator: Allocator, lk: kir.LinearKernel) !RegisterManager {
                 return .{
                     .allocator = allocator,
                     .counters = std.AutoHashMap(DType, usize).init(allocator),
                     .reg_map = std.AutoHashMap(kir.Operand, []const u8).init(allocator),
+                    .reg_types = std.StringHashMap(DType).init(allocator),
+                    .param_map = std.StringHashMap(*rir.RIROP).init(allocator),
+                    .lk = lk,
                 };
             }
 
@@ -202,28 +232,100 @@ fn buildKernel(kernel: kir.LinearKernel) ![]const u8 {
                     }
                 }.createReg;
 
+                var reg: []const u8 = undefined;
+
                 switch (op) {
                     .kirop => |kirop| {
+                        const dtype: DType = self.getDTypeFromOp(op.kirop);
+
                         switch (kirop.*) {
-                            .add => {
-                                return try createReg(self, .f32, op);
+                            .add, .constant => {
+                                reg = try createReg(self, dtype, op);
+                            },
+                            .multiply => {
+                                reg = try createReg(self, .u64, op);
                             },
                             .load => {
-                                return try createReg(self, .usize, op);
+                                reg = try createReg(self, dtype, op);
+                            },
+                            .convert => |convert| {
+                                reg = try createReg(self, convert.to_type, op);
                             },
                             .special => {
-                                return try createReg(self, .u32, op);
+                                reg = try createReg(self, dtype, op);
                             },
                             else => std.debug.panic("unsupported op in getRegister: {any}\n", .{kirop.*}),
                         }
+
+                        try self.reg_types.put(reg, dtype);
                     },
                     .param => {
-                        const reg = try std.fmt.allocPrint(self.allocator, "%param_{d}", .{self.param_counter});
-                        try self.reg_map.put(op, reg);
-                        self.param_counter += 1;
-                        return reg;
+                        for (self.lk.params, 0..) |param, idx| {
+                            if (param == op.param) {
+                                reg = try std.fmt.allocPrint(self.allocator, "%param_{d}", .{idx});
+                                try self.reg_map.put(op, reg);
+                                self.param_counter += 1;
+
+                                try self.reg_types.put(reg, .u64);
+                            }
+                        }
                     },
                 }
+
+                return reg;
+            }
+
+            // TODO: move this somewhere else, this has nothing to do with the core of codegen
+            fn getDTypeFromOp(self: *RegisterManager, op: *kir.KIROP) DType {
+                switch (op.*) {
+                    .add => |add| {
+                        const a = self.reg_map.get(add.src1) orelse return .u64;
+                        const b = self.reg_map.get(add.src2) orelse return .u64;
+
+                        const a_dtype = self.reg_types.get(a).?;
+                        const b_dtype = self.reg_types.get(b).?;
+
+                        if (a_dtype == .u64 or b_dtype == .u64) return .u64;
+
+                        if (a_dtype != b_dtype) {
+                            return a_dtype;
+                        } else {
+                            return a_dtype;
+                        }
+                    },
+                    .multiply => |multiply| {
+                        const a = self.reg_map.get(multiply.a) orelse return .u64;
+                        const b = self.reg_map.get(multiply.b) orelse return .u64;
+
+                        const a_dtype = self.reg_types.get(a).?;
+                        const b_dtype = self.reg_types.get(b).?;
+
+                        if (a_dtype == .u64 or b_dtype == .u64) return .u64;
+
+                        if (a_dtype != b_dtype) {
+                            return a_dtype;
+                        } else {
+                            return a_dtype;
+                        }
+                    },
+                    .load => |load| {
+                        if (load.addr == .param) return .u64;
+
+                        return load.addr.getDType();
+                    },
+                    .store => |store| {
+                        return store.addr.getDType();
+                    },
+                    .constant => return .u32,
+                    .convert => |convert| {
+                        return convert.src.getDType();
+                    },
+                    .special => return .u32,
+                }
+            }
+
+            pub fn getRegisterDType(self: *RegisterManager, reg: []const u8) !DType {
+                return self.reg_types.get(reg) orelse @panic("fix this");
             }
 
             pub fn generateDirectives(self: *RegisterManager) ![]ptxast.Directive {
@@ -249,42 +351,17 @@ fn buildKernel(kernel: kir.LinearKernel) ![]const u8 {
                 }
                 return try param_list.toOwnedSlice(self.allocator);
             }
-        };
 
-        // TODO: better system for these 3 functions below
-        fn getDTypeFromOp(op: *kir.KIROP) DType {
-            switch (op.*) {
-                .add => |add| {
-                    if (add.src1 == .param or add.src2 == .param) return .u64;
+            fn isOpWide(self: *RegisterManager, a: []const u8, b: []const u8) bool {
+                const a_dtype = self.reg_types.get(a).?;
+                const b_dtype = self.reg_types.get(b).?;
 
-                    const a_dtype = add.src1.getDType();
-                    const b_dtype = add.src2.getDType();
-
-                    if (a_dtype != b_dtype) {
-                        return a_dtype;
-                    } else {
-                        return a_dtype;
-                    }
-                },
-                else => @panic("fuck"),
+                if (a_dtype == b_dtype) return false else return true;
             }
-        }
-
-        fn getWideFromOp(op: *kir.KIROP) bool {
-            return switch (op.*) {
-                .add => |add| {
-                    const a_dtype = add.src1.getDType();
-                    const b_dtype = add.src2.getDType();
-
-                    if (a_dtype != b_dtype) return true else return false;
-                },
-                else => @panic("getting wide in an op that can't have wide"),
-            };
-        }
+        };
 
         fn build(self: *@This()) ![]const u8 {
             for (self.lk.ops) |op| {
-                std.debug.print("{any}\n", .{op.*});
                 switch (op.*) {
                     .add => |add| {
                         const a = try self.register_manager.getRegister(add.src1);
@@ -296,8 +373,22 @@ fn buildKernel(kernel: kir.LinearKernel) ![]const u8 {
                                 .src1 = .{ .register = a },
                                 .src2 = .{ .register = b },
                                 .dest = .{ .register = dest },
-                                .type = getDTypeFromOp(op),
-                                .wide = getWideFromOp(op),
+                                .type = try self.register_manager.getRegisterDType(dest),
+                            },
+                        });
+                    },
+                    .multiply => |multiply| {
+                        const a = try self.register_manager.getRegister(multiply.a);
+                        const b = try self.register_manager.getRegister(multiply.b);
+
+                        const dest = try self.register_manager.getRegister(.{ .kirop = op });
+                        try self.instructions.append(.{
+                            .mul = .{
+                                .src1 = .{ .register = a },
+                                .src2 = .{ .register = b },
+                                .dest = .{ .register = dest },
+                                .type = .u32,
+                                .modifier = .wide,
                             },
                         });
                     },
@@ -314,19 +405,39 @@ fn buildKernel(kernel: kir.LinearKernel) ![]const u8 {
                                 .src = .{
                                     .register = addr,
                                 },
-                                .type = op.getDType(),
+                                .type = try self.register_manager.getRegisterDType(dest),
                             },
                         });
                     },
                     .store => |store| {
                         const src = try self.register_manager.getRegister(.{ .kirop = store.src.kirop });
-                        const dest = try self.register_manager.getRegister(.{ .param = store.addr.param });
+                        const dest = try self.register_manager.getRegister(.{ .kirop = store.addr.kirop });
                         try self.instructions.append(.{
                             .st = .{
-                                .space = .param,
+                                .space = .global,
                                 .dest = .{ .parameter = dest },
                                 .src = .{ .register = src },
-                                .type = op.getDType(),
+                                .type = try self.register_manager.getRegisterDType(src),
+                            },
+                        });
+                    },
+                    .convert => |convert| {
+                        const src = try self.register_manager.getRegister(convert.src);
+                        const dest = try self.register_manager.getRegister(.{ .kirop = op });
+                        try self.instructions.append(.{ .cvt = .{
+                            .dest = .{ .register = dest },
+                            .src = .{ .register = src },
+                            .type_from = try self.register_manager.getRegisterDType(src),
+                            .type_to = convert.to_type,
+                        } });
+                    },
+                    .constant => |constant| {
+                        const dest = try self.register_manager.getRegister(.{ .kirop = op });
+                        try self.instructions.append(.{
+                            .mov = .{
+                                .dest = .{ .register = dest },
+                                .src = .{ .immediate = .{ .integer = @intCast(constant) } },
+                                .type = .u32,
                             },
                         });
                     },
@@ -347,7 +458,7 @@ fn buildKernel(kernel: kir.LinearKernel) ![]const u8 {
                         try self.instructions.append(.{ .mov = .{
                             .dest = .{ .register = dest },
                             .src = .{ .register = special_reg },
-                            .type = op.getDType(),
+                            .type = try self.register_manager.getRegisterDType(dest),
                         } });
                     },
                     // else => {

@@ -24,7 +24,7 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
     for (kernel.directives) |directive| {
         switch (directive) {
             .reg => |reg| {
-                try writer.print(" .reg .{s} {s}<{d}>;\n", .{ @tagName(reg.type), reg.name, reg.count });
+                try writer.print(" .reg .{s} %{s}_<{d}>;\n", .{ @tagName(reg.type), reg.name, reg.count });
             },
             .global => |global| {
                 try writer.print(" .global .{s} {s}[{d}];\n", .{ @tagName(global.type), global.name, global.size });
@@ -89,6 +89,14 @@ pub fn emit(allocator: std.mem.Allocator, ast: ptxast.PTXAst) ![]const u8 {
                     @tagName(st.type),
                     emitOperand(st.dest, &operand_buffer),
                     emitOperand(st.src, &operand_buffer),
+                });
+            },
+            .cvt => |cvt| {
+                try writer.print(" cvt.{s}.{s} {s}, {s};\n", .{
+                    @tagName(cvt.type_to),
+                    @tagName(cvt.type_from),
+                    emitOperand(cvt.dest, &operand_buffer),
+                    emitOperand(cvt.src, &operand_buffer),
                 });
             },
             .cvta => |cvta| {

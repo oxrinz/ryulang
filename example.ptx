@@ -1,31 +1,37 @@
 .version 8.4
 .target sm_52
 .address_size 64
+
 .visible .entry main(
-.param .u64 %param_0,
-.param .u64 %param_1
+    .param .u64 %param_0,
+    .param .u64 %param_1,
+    .param .u64 %param_2
 )
 {
-.reg .b64 %rd_<3>;
-.reg .f32 %f32_<5>;
-.reg .s32 %r_<3>;
-mov.u32 %r_0, %tid.x;
-mov.u32 %r_1, %tid.y;
-mov.u32 %r_2, %ctaid.x;
-mul.wide.u32 %rd_1, %r_2, 256;
-mad.wide.u32 %rd_1, %r_1, 16, %rd_1;
-add.u64 %rd_1, %rd_1, %r_0;
-ld.param.u64 %rd_2, [%param_1];
-setp.ge.u64 %p0, %rd_1, %rd_2;
-bra.uni %p0, end;
-ld.param.u64 %rd_0, [%param_0];
-shl.b64 %rd_2, %rd_1, 2;
-ld.global.f32 %f32_0, [%rd_0 + %rd_2];
-mov.f32 %f32_1, 2.000000e0;
-mov.f32 %f32_2, 4.000000e0;
-add.f32 %f32_3, %f32_0, %f32_1;
-add.f32 %f32_4, %f32_3, %f32_2;
-st.global.f32 %f32_4, [%rd_0 + %rd_2];
+    .reg .f32 %f32_<3>;
+    .reg .u64 %u64_<7>;
+    .reg .u32 %u32_<2>;
+
+    ld.param.u64 %u64_0, [%param_2];
+    mov.u32 %u32_0, %tid.x;
+    mov.u32 %u32_1, 4;
+    mul.wide.u32 %u64_1, %u32_0, %u32_1;
+    add.u64 %u64_2, %u64_0, %u64_1;
+    mov.u32 %u32_0, %tid.x;
+    mov.u32 %u32_1, 4;
+    mul.wide.u64 %u64_1, %u32_0, %u32_1;
+    ld.param.u64 %u64_3, [%param_0];
+    add.u64 %u64_4, %u64_1, %u64_3;
+    ld.global.f32 %f32_0, [%u64_4];
+    mov.u32 %u32_0, %tid.x;
+    mov.u32 %u32_1, 4;
+    mul.wide.u64 %u64_1, %u32_0, %u32_1;
+    ld.param.u64 %u64_5, [%param_1];
+    add.u64 %u64_6, %u64_1, %u64_5;
+    ld.global.f32 %f32_1, [%u64_6];
+    add.f32 %f32_2, %f32_0, %f32_1;
+    st.global.f32 [%u64_2], %f32_2;
+
 end:
-ret;
+    ret;
 }

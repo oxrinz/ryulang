@@ -25,10 +25,8 @@ pub const Buffer = struct {
     dtype: DType,
     size: usize,
 
-    pub fn asBytes(self: @This()) []const u8 {
-        const ptr_as_bytes: [*]const u8 = @ptrCast(self.ptr);
-        return ptr_as_bytes[0..self.getSizeInBytes()];
-    }
+    // if a 
+    src: *RIROP,
 
     pub fn getSizeInBytes(self: @This()) usize {
         return self.size * self.dtype.getSizeInBytes();

@@ -50,6 +50,7 @@ pub const Instruction = union(enum) {
     ld: LoadInst,
     st: StoreInst,
     bra: BranchInst,
+    cvt: ConvertToInst,
     cvta: ConvertToAddrInst,
     fma: FusedMultiplyAddInst,
     shfl: ShuffleInst,
@@ -64,19 +65,16 @@ pub const AddInst = struct {
     src1: Operand,
     src2: Operand,
     type: DType,
-    wide: bool = false,
     modifier: enum {
         none,
         lo,
         hi,
-        wide,
         sat,
         pub fn toString(self: @This()) []const u8 {
             return switch (self) {
                 .none => "",
                 .lo => ".lo",
                 .hi => ".hi",
-                .wide => ".wide",
                 .sat => ".sat",
             };
         }
@@ -167,6 +165,13 @@ pub const StoreInst = struct {
 pub const BranchInst = struct {
     label: []const u8,
     predicate: ?Operand,
+};
+
+pub const ConvertToInst = struct {
+    type_from: DType,
+    type_to: DType,
+    dest: Operand,
+    src: Operand,
 };
 
 pub const ConvertToAddrInst = struct {

@@ -20,8 +20,20 @@ pub const KIROP = union(enum) {
         src1: Operand,
         src2: Operand,
     },
+    multiply: struct {
+        a: Operand,
+        b: Operand,
+    },
     load: struct { addr: Operand },
     store: struct { src: Operand, addr: Operand },
+
+    convert: struct {
+        src: Operand,
+        to_type: DType,
+    },
+
+    constant: u64,
+
     special: union(enum) {
         global: enum { x, y, z },
         local: enum { x, y, z },
@@ -31,18 +43,24 @@ pub const KIROP = union(enum) {
         return switch (self.*) {
             .add => |*add| {
                 const a_dtype = add.src1.getDType();
-
                 return a_dtype;
+            },
+            .multiply => |*multiply| {
+                return multiply.a.getDType();
             },
             .load => |*load| {
                 const dtype = load.addr.getDType();
-
                 return dtype;
             },
             .store => |*store| {
                 return store.src.getDType();
             },
-            .special => return .u32,
+            .convert => |*convert| {
+                return convert.src.getDType();
+            },
+            .constant => return .u64,
+            // TODO: this system currently assumes that every param is a f32
+            .special => return .f32,
         };
     }
 };
